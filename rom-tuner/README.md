@@ -4,7 +4,7 @@ Settings app and root daemon for the TB-X606V ROMs (Android 14 and 16). Built wi
 
 <img src="docs/icon-light.png" width="96"> <img src="docs/icon-dark.png" width="96">
 
-Launcher icon: adaptive icon with a themed (monochrome) layer; the app resolves the dark variant (`res/drawable-night`) when the system is in dark mode.
+Launcher icon: a performance dial in flat colour (no gradients or transparency, so it stays crisp at launcher size). Adaptive icon with a themed (monochrome) layer; the dark variant (`res/drawable-night`) is used when the system is in dark mode.
 Sources: `assets/icon.svg`, `assets/icon-dark.svg`.
 
 ## What it does
