@@ -1,43 +1,108 @@
-# Android 16 on the Lenovo TB-X606V (Tab M10 FHD Plus, MT8768, Android 10 vendor, kernel 4.9.190)
+# Android 16 for the Lenovo TB-X606V
 
-LineageOS 23.2 (Android 16) GSI, `lineage_arm64_bgN`, build 2026-05-24, running on the stock Android 10 vendor with the 4.9 kernel.
-Status: boots, runs smooth (reported as the smoothest of everything tried on this tablet), Bluetooth works with the default below.
-Not verified here: camera, Wi-Fi 5 GHz throughput, Dolby, DRM level.
+A build recipe, patch set and prebuilt image that run Android 16 (LineageOS 23.2 GSI) on the Lenovo Tab M10 FHD Plus (TB-X606V). The tablet keeps its stock Android 10 vendor image and its 4.9.190 kernel. Only the `system` partition is replaced.
 
-Device: A-only, `system` partition 0xf3800000 bytes (3.8 GiB), unlocked bootloader, TWRP in `recovery`. **Never flash recovery.**
-Enter TWRP with Volume Up + Volume Down held together, the bootloader with Power + Volume Down from off.
+Lenovo stopped at Android 10 for this tablet. A stock GSI of Android 16 boots to the boot animation and stays there, and the apps that do start crash or lose their audio. This repository contains the fixes found while debugging that, the scripts that apply them, and a GitHub Actions workflow that builds the image from the public GSI.
 
-## Why a plain GSI hangs on the boot animation
-`system_server` aborts ~2 s after start and zygote restarts it in a loop (21 times in 5 min). Root cause, from logcat: `StorageManagerService`
--> `MediaCodecList` -> `OmxInfoBuilder` -> `AudioCapabilities::getDefaultFormat` hits a UBSan sub-overflow abort. The Android 10 vendor declares
-`OMX.MTK.AUDIO.DECODER.MP2` with type `audio/mpeg-L2`, which Android 16 rejects ("Unsupported mediaType audio/mpeg-L2"), leaving its ranges
-empty. `mediaserver32` dies on the same entry. See `docs/ANALYSIS.md`.
+## Device
 
-## What the image contains (`build/build_image.py`)
-| Change | Why |
-|--------|-----|
-| `/system/bin/init` boots SELinux permissive (`patch_init.py`; original kept as `init.enforcing`) | cmdline `androidboot.selinux=permissive` is ignored; the user wants SELinux off |
-| `persist.sys.bt.unsupported.commands=182` in `build.prop` | the "Treble Settings > Misc > Bluetooth workaround > MediaTek" option, as a ROM default |
-| `ro.debuggable=1`, `ro.secure=0`, `persist.sys.usb.config=adb` | rooted adb from first boot (`--no-debug` to skip) |
-| `libhwui.so` patched (64 and 32-bit), `patches/patch_libhwui.py` | Android 16 seals bitmap memfds with `F_SEAL_FUTURE_WRITE` (Linux 5.1+); on kernel 4.9 every bitmap over 16 KB sent through binder fails with "Could not copy bitmap to parcel blob", which crashed YouTube. `docs/BitmapParcelTest.java` reproduces it |
-| `--with-tuner`: ROM Tuner app + root daemon, ArrowOS boot animation (default), stock animation, optional galaxy | see `rom-tuner/README.md`; the daemon seeds the Smooth preset |
-| `--dolby DIR`: Dolby Atmos apps (proprietary, supply your own) | Treble Settings > Audio effects must stay off: it attaches five effects (including DAP and Dynamics Processing) to every playback session and app audio cuts out after a few ms |
-| `bootdiag` service, logs to `/cache/bootdiag` (`--no-bootdiag` to skip) | `/data` is FBE-encrypted, unreadable in TWRP; remove once stable |
+| | |
+|---|---|
+| Model | Lenovo TB-X606V (Tab M10 FHD Plus, 2nd gen) |
+| SoC | MediaTek MT8768, PowerVR GE8320 |
+| Memory | 3.8 GB RAM, 3.8 GiB `system` partition (0xf3800000 bytes) |
+| Base | Android 10 vendor, kernel 4.9.190, A-only, bootloader unlocked |
+| Recovery | TWRP in `recovery`. Nothing in this repository touches it. |
+| ROM base | LineageOS 23.2 GAPPS EXT4 GSI, build 2026-05-24 (MisterZtr) |
 
-The codec fix is on `/vendor`, so it is not in the system image: `patches/fix_vendor_codecs.py` (run from TWRP), or flash a vendor image that has it.
+## Status
 
-## Build and flash
+Verified on the tablet: boots to the launcher, root adb from the first boot, Wi-Fi, Bluetooth (with the MediaTek workaround), speaker audio, YouTube playback with hardware H.264 decoding, Dolby Atmos app, and the ROM Tuner app.
+
+Not verified: camera, 5 GHz Wi-Fi throughput, DRM level for streaming apps, cellular on LTE variants.
+
+The image trades security for convenience: SELinux boots permissive, `ro.debuggable=1`, and adb accepts any USB host without authorization. Treat it as a personal device ROM.
+
+## What the patches fix
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Boot animation never ends | `system_server` aborts about two seconds after it starts. Android 16 rejects the vendor codec entry `OMX.MTK.AUDIO.DECODER.MP2` (`audio/mpeg-L2`) and a UBSan check in `AudioCapabilities::getDefaultFormat` kills the process. | `patches/fix_vendor_codecs.py` removes the entry from `/vendor/etc/media_codecs_mediatek_audio.xml`. |
+| SELinux denials during boot and no usable logs | The boot command line override `androidboot.selinux=permissive` is ignored by this bootloader. | `patches/patch_init.py` changes one instruction in `/system/bin/init` so it boots permissive. The original is kept as `init.enforcing`. |
+| YouTube and other apps crash with "Could not copy bitmap to parcel blob" | `libhwui` seals bitmap memfds with `F_SEAL_FUTURE_WRITE`, which needs Linux 5.1. On kernel 4.9 the call fails, so no bitmap over 16 KB can cross binder. | `patches/patch_libhwui.py` drops that seal in the 64-bit and 32-bit libraries. `docs/BitmapParcelTest.java` reproduces the failure. |
+| App audio plays for a few milliseconds, then stops | Treble Settings, Audio effects, attaches five effects to every playback session, including DAP and Dynamics Processing. | The ROM Tuner daemon keeps those switches off. |
+| Bluetooth does not work with the default settings | The MediaTek controller reports an HCI command as unknown (opcode 0xc5a on Android 14), which the stock stack does not tolerate. | `persist.sys.bt.unsupported.commands=182` in `build.prop`, the same value the Treble Settings "MediaTek" option sets. |
+| YouTube 1080p stutters | The vendor VP9 decoder is a software decoder. | The vendor VP9 entry is removed, so YouTube falls back to hardware H.264. |
+
+`docs/ANALYSIS.md` has the logs and backtraces behind the boot hang.
+
+## Install a prebuilt image
+
+You need a computer with `adb` and `fastboot`, and a USB cable. Flashing wipes the tablet's data.
+
+1. Download the system image from the Releases page and unpack it with `xz -d`. The `rom-a16-full-v1` release also carries a vendor image with the codec fix.
+2. Switch the tablet off, then hold Power and Volume Down to enter the bootloader. Connect it to the computer.
+3. Flash:
+   ```sh
+   ./flash.sh system-a16-tb-x606v.img                              # system only
+   ./flash.sh system-a16-tb-x606v.img vendor-fixed-tb-x606v.img    # system and the patched vendor
+   ```
+   The script writes `system` (and `vendor` when given), then formats userdata and erases metadata and cache. It never writes `recovery`, `boot` or `vbmeta`.
+4. If you flashed the system image alone, boot into TWRP (hold Volume Up and Volume Down) before the first Android boot and run `python3 patches/fix_vendor_codecs.py` from the computer. Without the codec fix the tablet stays on the boot animation.
+5. Reboot. The first boot takes several minutes.
+
+To go back, flash a saved `system.img` the same way. Back up the stock partitions with TWRP first if you want a way home to Android 10.
+
+## Build the image
+
+Requirements: Python 3 and e2fsprogs (`debugfs`, `e2fsck`, `resize2fs`). On macOS e2fsprogs is keg-only, so pass `--e2fs /opt/homebrew/opt/e2fsprogs/sbin`.
+
 ```sh
-# GSI: LineageOS 23.2 GAPPS EXT4 arm64 bgN (xz -d it first; it must be a raw ext4 image)
-python3 build/build_image.py --gsi LineageOS-23.2-20260524-GAPPS-EXT4-GSI.img --out system.img --with-tuner   # needs e2fsprogs (debugfs, e2fsck, resize2fs); add --dolby DIR for Dolby
-./flash.sh system.img            # system only; wipes userdata/metadata/cache; tablet in the bootloader
-# then, BEFORE the first Android boot, in TWRP:
-python3 patches/fix_vendor_codecs.py
+# 1. Download LineageOS-23.2-20260524-GAPPS-EXT4-GSI.7z from the MisterZtr SourceForge project and extract the .img
+# 2. Build
+python3 build/build_image.py \
+  --gsi LineageOS-23.2-20260524-GAPPS-EXT4-GSI.img \
+  --out system.img \
+  --with-tuner
 ```
-Without the vendor fix the first boot loops on the boot animation. Boot takes several minutes; with the debug props adb appears once `system_server` is up.
 
-## If it hangs
-Reboot into TWRP and read `/cache/bootdiag/logcat.txt*` (and `/sys/fs/pstore/console-ramoops`, which is flooded by an MTK RT-scheduler debug print).
-Restore: flash a saved `system.img` (this repo does not store images).
+The script copies the GSI, grows it to the partition size, checks the filesystem, and writes the patches inside the ext4 image with `debugfs`. It does not mount anything, so it runs on macOS and Linux without root.
 
-No license has been chosen. Scripts are original work; the GSI, Lenovo vendor image and Google/Lineage binaries are not included.
+| Option | Effect |
+|---|---|
+| `--with-tuner` | Installs ROM Tuner, its root daemon and the boot animations. ArrowOS is the default animation. |
+| `--galaxy FILE` | Adds the generated galaxy animation as a choice (`rom-tuner/boot-animation/make_galaxy.py` renders it). |
+| `--dolby DIR` | Installs Dolby Atmos from `DaxUI.apk`, `daxService.apk` and `com.dolby.daxservice.xml` in `DIR`. These files come from the stock Lenovo firmware and are not in this repository. |
+| `--no-debug` | Keeps `ro.debuggable=0` and `ro.secure=1`. |
+| `--no-bootdiag` | Leaves out the boot logging service. |
+| `--e2fs DIR` | Directory that holds the e2fsprogs binaries. |
+
+Each patch script checks the SHA-256 of the file it edits and refuses to run on a different build, because the byte offsets would be wrong.
+
+### Continuous integration
+
+`.github/workflows/build-rom.yml` downloads the GSI, verifies its checksum, renders the galaxy animation, builds the image with `--with-tuner`, compresses it and uploads it as an artifact. Start it from the Actions tab. Tick "publish" or push a `rom-v*` tag to attach the image to a release. The workflow output has no Dolby apps and no vendor image.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `build/build_image.py` | Image builder |
+| `flash.sh` | Fastboot flashing script |
+| `patches/` | `patch_init.py`, `patch_libhwui.py`, `fix_vendor_codecs.py` |
+| `rom-tuner/` | ROM Tuner app source, root daemon, boot animations and built APK. See its README. |
+| `debug/` | Boot logging service that writes to `/cache/bootdiag` |
+| `docs/` | Boot hang analysis, bitmap parcel test, release notes |
+| `.github/workflows/` | Image build workflow |
+
+## Troubleshooting
+
+The tablet never reaches Android and adb sees nothing. Reboot into TWRP (Volume Up and Volume Down) and read `/cache/bootdiag/logcat.txt*` over adb. `/data` is encrypted and unreadable from TWRP, which is why the logging service writes to `/cache`. The kernel console of the failed boot is in `/sys/fs/pstore/console-ramoops`.
+
+`/` and `/vendor` are read-only again after every boot. Run `adb root; adb shell mount -o remount,rw /` before pushing files, and replace system libraries with a new file followed by `mv`. Overwriting a mapped library in place crashes the processes that use it.
+
+App audio cuts out. Open Treble Settings, Audio effects, and switch every effect off. The ROM Tuner daemon does this automatically unless "Allow Treble audio effects" is enabled.
+
+## Licensing and credits
+
+No license has been chosen for the scripts in this repository. The system image is built from the LineageOS GSI by MisterZtr (LineageOS, TrebleDroid and phh-treble patches). The ArrowOS boot animation comes from the ArrowOS GSI that the tablet ran before. Dolby Atmos and the Lenovo vendor image belong to their owners and are not part of the build recipe. Release assets that contain them are for private use only.
