@@ -19,6 +19,9 @@ empty. `mediaserver32` dies on the same entry. See `docs/ANALYSIS.md`.
 | `/system/bin/init` boots SELinux permissive (`patch_init.py`; original kept as `init.enforcing`) | cmdline `androidboot.selinux=permissive` is ignored; the user wants SELinux off |
 | `persist.sys.bt.unsupported.commands=182` in `build.prop` | the "Treble Settings > Misc > Bluetooth workaround > MediaTek" option, as a ROM default |
 | `ro.debuggable=1`, `ro.secure=0`, `persist.sys.usb.config=adb` | rooted adb from first boot (`--no-debug` to skip) |
+| `libhwui.so` patched (64 and 32-bit), `patches/patch_libhwui.py` | Android 16 seals bitmap memfds with `F_SEAL_FUTURE_WRITE` (Linux 5.1+); on kernel 4.9 every bitmap over 16 KB sent through binder fails with "Could not copy bitmap to parcel blob", which crashed YouTube. `docs/BitmapParcelTest.java` reproduces it |
+| `--with-tuner`: ROM Tuner app + root daemon, ArrowOS boot animation (default), stock animation, optional galaxy | see `rom-tuner/README.md`; the daemon seeds the Smooth preset |
+| `--dolby DIR`: Dolby Atmos apps (proprietary, supply your own) | Treble Settings > Audio effects must stay off: it attaches five effects (including DAP and Dynamics Processing) to every playback session and app audio cuts out after a few ms |
 | `bootdiag` service, logs to `/cache/bootdiag` (`--no-bootdiag` to skip) | `/data` is FBE-encrypted, unreadable in TWRP; remove once stable |
 
 The codec fix is on `/vendor`, so it is not in the system image: `patches/fix_vendor_codecs.py` (run from TWRP), or flash a vendor image that has it.
@@ -26,7 +29,7 @@ The codec fix is on `/vendor`, so it is not in the system image: `patches/fix_ve
 ## Build and flash
 ```sh
 # GSI: LineageOS 23.2 GAPPS EXT4 arm64 bgN (xz -d it first; it must be a raw ext4 image)
-python3 build/build_image.py --gsi LineageOS-23.2-20260524-GAPPS-EXT4-GSI.img --out system.img   # needs e2fsprogs (debugfs, e2fsck, resize2fs)
+python3 build/build_image.py --gsi LineageOS-23.2-20260524-GAPPS-EXT4-GSI.img --out system.img --with-tuner   # needs e2fsprogs (debugfs, e2fsck, resize2fs); add --dolby DIR for Dolby
 ./flash.sh system.img            # system only; wipes userdata/metadata/cache; tablet in the bootloader
 # then, BEFORE the first Android boot, in TWRP:
 python3 patches/fix_vendor_codecs.py

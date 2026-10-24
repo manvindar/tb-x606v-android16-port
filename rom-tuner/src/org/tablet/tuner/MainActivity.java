@@ -142,6 +142,34 @@ public class MainActivity extends Activity {
         return new Intent().setComponent(new ComponentName(pkg, cls)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
+    private String[] list(String key, String fallback) {
+        String v = get(key, "");
+        return (v.isEmpty() ? fallback : v).split(",");
+    }
+
+    private String[] gpuValues() {
+        String[] o = list("gpu_opps", "680000,500000,400000");
+        String[] r = new String[o.length + 1]; r[0] = "0";
+        System.arraycopy(o, 0, r, 1, o.length);
+        return r;
+    }
+
+    private String[] gpuLabels() {
+        String[] v = gpuValues(), r = new String[v.length]; r[0] = "Auto";
+        for (int i = 1; i < v.length; i++) r[i] = (Integer.parseInt(v[i]) / 1000) + " MHz";
+        return r;
+    }
+
+    private static String fontLabel(String f) {
+        switch (f) {
+            case "lato": return "Lato";
+            case "rubik": return "Rubik";
+            case "notoserifsource": return "Noto Serif";
+            case "googlesansflex": return "Google Sans Flex";
+            default: return f.substring(0, 1).toUpperCase(Locale.US) + f.substring(1);
+        }
+    }
+
     // ---------- UI ----------
     private void build() {
         building = true;
@@ -158,6 +186,39 @@ public class MainActivity extends Activity {
         col.addView(text("ROM Tuner", 30, true, 0));
         String prof = get("perf_profile", "balanced");
         col.addView(text(get("status", "waiting for the tuner daemon…"), 13, false, night ? 0xFF9A9AA0 : 0xFF6C6C70));
+
+        // ---- Presets ----
+        section("Presets");
+        LinearLayout pc = card();
+        String[][] presets = {
+            {"battery", "Battery saver", "Low power mode, clocks capped, GPU auto."},
+            {"balanced", "Balanced", "Everyday default: moderate clock floor, GPU at 680 MHz."},
+            {"smooth", "Smooth", "Performance profile with stronger app boosts and more free memory. Measured: Settings scroll jank 2.8% to 1.7%."},
+            {"performance", "Performance", "Maximum app boosts, bigger write buffer. Measured: lowest scroll jank, 1.1%."},
+            {"extreme", "Extreme", "Everything on: top clocks pinned, performance governor, thermal limit off. Hot and short on battery; no UI gain over Performance in tests."}};
+        String curPreset = get("preset", "balanced");
+        LinearLayout chips2 = new LinearLayout(this);
+        chips2.setOrientation(LinearLayout.HORIZONTAL);
+        for (final String[] pr : presets) {
+            Button b = new Button(this);
+            b.setText(pr[1]);
+            b.setAllCaps(false);
+            b.setAlpha(pr[0].equals(curPreset) ? 1f : 0.55f);
+            b.setOnClickListener(v -> {
+                set("preset", pr[0]);
+                col.postDelayed(() -> { st = Cfg.load(this); build(); }, 2500);
+            });
+            chips2.addView(b);
+        }
+        HorizontalScrollView phs = new HorizontalScrollView(this);
+        phs.addView(chips2);
+        phs.setPadding(px(10), px(6), px(10), 0);
+        pc.addView(phs);
+        String desc = "Custom: you changed individual settings.";
+        for (String[] pr : presets) if (pr[0].equals(curPreset)) desc = pr[2];
+        TextView dt = text(desc, 13, false, night ? 0xFF9A9AA0 : 0xFF6C6C70);
+        dt.setPadding(px(16), px(10), px(16), px(12));
+        pc.addView(dt);
 
         // ---- Performance ----
         section("Performance");
@@ -185,13 +246,62 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rgp = new LinearLayout.LayoutParams(-1, -2);
         rgp.setMargins(px(12), px(4), px(12), px(4));
         c.addView(rg, rgp);
-        rowSwitch(c, "Lock GPU at maximum clock", "Keeps the PowerVR GPU at 680 MHz (ignored in Battery saver)", "gpu_lock", "1");
+        rowChoice(c, "GPU clock", "Lock the PowerVR GPU to one clock (ignored in Battery saver)", "gpu_freq", gpuLabels(), gpuValues(), "680000", false);
         rowChoice(c, "Fast cores: maximum clock", "Cap the four fast cores", "cap_big",
             new String[]{"No limit", "2.0 GHz", "1.75 GHz", "1.5 GHz", "1.2 GHz", "0.9 GHz"},
             new String[]{"-1", "2009000", "1750000", "1484000", "1218000", "900000"}, "-1", false);
         rowChoice(c, "Efficiency cores: maximum clock", "Cap the four slower cores", "cap_little",
             new String[]{"No limit", "1.5 GHz", "1.2 GHz", "1.05 GHz", "0.75 GHz"},
             new String[]{"-1", "1491000", "1226000", "1050000", "745000"}, "-1", false);
+
+        // ---- Tuning ----
+        section("Tuning");
+        c = card();
+        rowSwitch(c, "Overclock", "Pins both CPU clusters at their top clock with the performance governor. Runs hot and drains the battery.", "oc", "0");
+        rowChoice(c, "CPU governor", "Used when Overclock is off", "governor", list("govs", "schedplus,ondemand,interactive,performance,powersave"), list("govs", "schedplus,ondemand,interactive,performance,powersave"), "schedplus", false);
+        rowChoice(c, "Thermal limits", "Off removes the MediaTek thermal clock limit. Not recommended while charging.", "thermal",
+            new String[]{"Stock", "Off"}, new String[]{"stock", "off"}, "stock", false);
+        rowChoice(c, "I/O scheduler", "Storage request scheduling", "io_sched", list("io_scheds", "noop,deadline,cfq"), list("io_scheds", "noop,deadline,cfq"), "deadline", false);
+        rowChoice(c, "Read-ahead", "Prefetch size when reading storage", "readahead",
+            new String[]{"128 KB", "256 KB", "512 KB", "1 MB", "2 MB"}, new String[]{"128", "256", "512", "1024", "2048"}, "512", false);
+        rowChoice(c, "Swappiness", "Higher keeps more apps in memory by compressing them", "swappiness",
+            new String[]{"20", "40", "60", "80", "100"}, new String[]{"20", "40", "60", "80", "100"}, "100", false);
+        rowChoice(c, "TCP congestion control", null, "tcp_cc", list("tcps", "bic,cubic,reno"), list("tcps", "bic,cubic,reno"), "bic", false);
+
+        rowChoice(c, "Foreground app boost", "CPU boost for the visible app. Auto follows the profile.", "fg_boost",
+            new String[]{"Auto", "0", "10", "20", "30", "40", "60", "80", "100"}, new String[]{"auto", "0", "10", "20", "30", "40", "60", "80", "100"}, "auto", false);
+        rowChoice(c, "Top-app boost", "Extra boost for the app you are touching", "ta_boost",
+            new String[]{"0", "10", "20", "30", "50", "70"}, new String[]{"0", "10", "20", "30", "50", "70"}, "0", false);
+        rowSwitch(c, "Big-task rotation", "Moves heavy threads between fast cores to spread heat", "big_rotation", "0");
+        rowChoice(c, "Cache pressure", "Lower keeps file caches longer", "vfs_cache",
+            new String[]{"25", "50", "100", "150"}, new String[]{"25", "50", "100", "150"}, "50", false);
+        rowChoice(c, "Write-back threshold", "Share of memory that can hold unsaved writes. The vendor default is 1%, which makes large writes slow.", "dirty",
+            new String[]{"1%", "5%", "10%", "20%", "30%"}, new String[]{"1", "5", "10", "20", "30"}, "1", false);
+        rowChoice(c, "Free memory reserve", "Memory kept free so new apps start without waiting", "extra_free",
+            new String[]{"0", "24 MB", "48 MB", "96 MB"}, new String[]{"0", "24576", "49152", "98304"}, "49152", false);
+        rowChoice(c, "Swap read-ahead", "Pages read back from compressed memory at once", "page_cluster",
+            new String[]{"1 (stock)", "2", "4", "8"}, new String[]{"0", "1", "2", "3"}, "0", false);
+
+        // ---- Behaviour ----
+        section("Behaviour");
+        c = card();
+        rowChoice(c, "Screen timeout", null, "screen_timeout",
+            new String[]{"15 seconds", "30 seconds", "1 minute", "2 minutes", "5 minutes", "10 minutes", "30 minutes"},
+            new String[]{"15000", "30000", "60000", "120000", "300000", "600000", "1800000"}, "60000", false);
+        rowChoice(c, "Font size", null, "font_scale",
+            new String[]{"Small", "Default", "Large", "Largest"}, new String[]{"0.85", "1.0", "1.15", "1.3"}, "1.0", false);
+        rowChoice(c, "Stay awake while charging", null, "stay_awake",
+            new String[]{"Never", "On AC and USB", "On AC, USB and wireless"}, new String[]{"0", "3", "7"}, "0", false);
+        rowSwitch(c, "Auto-rotate", null, "auto_rotate", "1");
+        rowSwitch(c, "Show taps", "Draws a dot where you touch the screen", "show_taps", "0");
+        rowSwitch(c, "Turn off window blur", "Cheaper to draw; shade and dialogs lose the blur", "window_blur", "0");
+        rowChoice(c, "Private DNS", null, "dns",
+            new String[]{"Off", "Automatic", "Google", "Cloudflare", "AdGuard (blocks ads)", "Quad9"},
+            new String[]{"off", "auto", "google", "cloudflare", "adguard", "quad9"}, "auto", false);
+        rowChoice(c, "Cached app limit", "How many background apps stay in memory", "bg_procs",
+            new String[]{"System default", "8", "16", "32", "64"}, new String[]{"default", "8", "16", "32", "64"}, "default", false);
+        rowSwitch(c, "ADB over network", "Port 5555 on Wi-Fi. Anyone on the network can connect.", "adb_tcp", "0");
+        rowSwitch(c, "Bluetooth MediaTek workaround", "Same as Treble Settings > Misc > Bluetooth. Restarts Bluetooth.", "bt_work", "0");
 
         // ---- Appearance ----
         section("Appearance");
@@ -230,15 +340,20 @@ public class MainActivity extends Activity {
         rowChoice(c, "Palette style", null, "theme_style",
             new String[]{"Tonal spot", "Vibrant", "Expressive", "Spritz", "Rainbow", "Fruit salad", "Monochrome"},
             new String[]{"TONAL_SPOT", "VIBRANT", "EXPRESSIVE", "SPRITZ", "RAINBOW", "FRUIT_SALAD", "MONOCHROMATIC"}, "TONAL_SPOT", false);
-        rowChoice(c, "Font", null, "font",
-            new String[]{"System default", "Lato", "Rubik", "Noto Serif"},
-            new String[]{"default", "lato", "rubik", "notoserifsource"}, "lato", false);
-        rowChoice(c, "Icon shape", null, "icon_shape",
-            new String[]{"Default (circle)", "Squircle", "Rounded square", "Teardrop", "Pebble", "Vessel", "Tapered", "Square"},
-            new String[]{"default", "squircle", "roundedrect", "teardrop", "pebble", "vessel", "taperedrect", "square"}, "squircle", false);
-        rowChoice(c, "System icon pack", null, "icon_pack",
-            new String[]{"Default", "Rounded", "Filled", "Kai", "Sam", "Victor", "Circular"},
-            new String[]{"default", "rounded", "filled", "kai", "sam", "victor", "circular"}, "rounded", false);
+        // fonts and icon styles come from the overlays this ROM ships (the daemon reports them)
+        String[] fl = get("fonts", "").split(",");
+        java.util.ArrayList<String> fLabels = new java.util.ArrayList<>(), fVals = new java.util.ArrayList<>();
+        fLabels.add("System default"); fVals.add("default");
+        for (String f : fl) if (!f.isEmpty()) { fVals.add(f); fLabels.add(fontLabel(f)); }
+        if (fVals.size() > 1) rowChoice(c, "Font", null, "font", fLabels.toArray(new String[0]), fVals.toArray(new String[0]), "default", false);
+        if ("1".equals(get("has_shapes", "0")))
+            rowChoice(c, "Icon shape", null, "icon_shape",
+                new String[]{"Default (circle)", "Squircle", "Rounded square", "Teardrop", "Pebble", "Vessel", "Tapered", "Square"},
+                new String[]{"default", "squircle", "roundedrect", "teardrop", "pebble", "vessel", "taperedrect", "square"}, "default", false);
+        if ("1".equals(get("has_packs", "0")))
+            rowChoice(c, "System icon pack", null, "icon_pack",
+                new String[]{"Default", "Rounded", "Filled", "Kai", "Sam", "Victor", "Circular"},
+                new String[]{"default", "rounded", "filled", "kai", "sam", "victor", "circular"}, "default", false);
 
         // ---- Display & system UI ----
         section("Display & system UI");
@@ -265,7 +380,7 @@ public class MainActivity extends Activity {
             new String[]{"Stock (240)", "Compact (192)", "Small (213)", "Large (260)", "Largest (280)"},
             new String[]{"reset", "192", "213", "260", "280"}, "192", false);
         rowChoice(c, "Boot animation", null, "bootanim",
-            new String[]{"Galaxy", "Aurora ring", "Stock LineageOS"}, new String[]{"galaxy", "aurora", "stock"}, "galaxy", false);
+            new String[]{"ArrowOS", "Galaxy", "Aurora ring", "Stock LineageOS"}, new String[]{"arrow", "galaxy", "aurora", "stock"}, "arrow", false);
 
         // ---- System ----
         section("System");

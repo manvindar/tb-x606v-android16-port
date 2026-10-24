@@ -1,11 +1,17 @@
 # ROM Tuner
 
-Settings app and root daemon for the TB-X606V ROMs (Android 14 and 16). Built without Gradle (`sh build.sh`: aapt2, javac, d8, zipalign, apksigner).
+Settings app and root daemon for the TB-X606V ROMs (Android 14 and 16). Presets, CPU governor, overclock, GPU clock, thermal limits, I/O, memory, network and behaviour tweaks. Built without Gradle (`sh build.sh`: aapt2, javac, d8, zipalign, apksigner).
 
 <img src="docs/icon-light.png" width="96"> <img src="docs/icon-dark.png" width="96">
 
 Launcher icon: a performance dial in flat colour (no gradients or transparency, so it stays crisp at launcher size). Adaptive icon with a themed (monochrome) layer; the dark variant (`res/drawable-night`) is used when the system is in dark mode.
 Sources: `assets/icon.svg`, `assets/icon-dark.svg`.
+
+## Presets
+Battery saver, Balanced, Smooth, Performance, Extreme. Measured on the tablet with a scripted Settings fling (`gfxinfo` janky frames) and an 8-thread compute loop:
+Battery 7.4% janky / p95 34 ms; Balanced 2.8% / 19 ms; Performance profile 2.6% / 23 ms; Smooth (boosts 60/30, bigger free-memory reserve) 1.7% / 18 ms; Performance preset (boosts 100/70) 1.1% / 22 ms.
+Pinning clocks (Overclock) and turning thermal limits off gave no extra UI smoothness. Big-task rotation made the 8-thread compute run 20 to 30% slower, so no preset enables it.
+The daemon re-applies the profile every 5 s because the MediaTek power HAL rewrites power mode, boosts and clock limits.
 
 ## What it does
 Performance profile (battery / balanced / performance, GPU lock, CPU max clocks), dark mode, pure black, accent colour, palette style, font, icon shape,
