@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Free disk space
         run: |
@@ -63,7 +63,7 @@ jobs:
           sha256sum system-a16-tb-x606v.img.xz | tee system-a16-tb-x606v.img.xz.sha256
           ls -la system-a16-tb-x606v.img.xz
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: system-a16-tb-x606v
           path: |
