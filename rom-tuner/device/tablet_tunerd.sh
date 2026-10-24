@@ -44,7 +44,7 @@ load() {
   . $S
   [ -z "$gpu_freq" ] && gpu_freq=$([ "$gpu_lock" = 0 ] && echo 0 || echo 680000)
   : ${fg_boost:=auto} ${ta_boost:=0} ${big_rotation:=0} ${vfs_cache:=50} ${dirty:=1} ${extra_free:=49152} ${page_cluster:=0}
-  : ${governor:=schedplus} ${oc:=0} ${thermal:=stock} ${io_sched:=deadline} ${readahead:=512} ${swappiness:=100} ${tcp_cc:=bic}
+  : ${phh_effects:=0} ${governor:=schedplus} ${oc:=0} ${thermal:=stock} ${io_sched:=deadline} ${readahead:=512} ${swappiness:=100} ${tcp_cc:=bic}
 }
 putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
 publish() {   # copy state (+ a status line) to the app; the file is pre-created with the app's owner/context
@@ -182,7 +182,7 @@ handle() {
   while IFS== read -r k v; do
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|night|black_theme|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work) ;; *) putkey preset custom;; esac
+    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work) ;; *) putkey preset custom;; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -219,9 +219,24 @@ w /proc/ppm/policy_status "2 0"; w /proc/ppm/policy_status "3 0"   # FORCE_LIMIT
 w /proc/sys/kernel/printk "1 4 1 7"
 seedlive; load; profile; tune; night_; nav; anim; density_; bootanim; [ "$logging" = 1 ] && logging
 ( sleep 12; load; black; sleep 25; black ) &
+# Treble Settings > Audio effects attaches DAP, Dynamics Processing, Loudness Enhancer, Visualizer and Downmix to every playback session; on this tablet
+# that cuts app audio after a few ms. Keep them off unless the user allows them (phh_effects=1).
+phhfx() {
+  [ "$phh_effects" = 1 ] && return
+  D=/data/data/me.phh.treble.app; [ -d $D ] || return
+  P=$D/shared_prefs/me.phh.treble.app_preferences.xml
+  if [ ! -f $P ]; then
+    mkdir -p $D/shared_prefs
+    { echo "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>"; echo "<map>"
+      for u in 93f04452-e4fe-41cc-91f9-e475b6d1d69f e0e6539b-1781-7261-676f-6d7573696340 d069d9e0-8329-11df-9168-0002a5d5c51b 9d4921da-8225-4f29-aefa-39537a04bcaa fa415329-2034-4bea-b5dc-5b381c8d1e2c; do
+        echo "    <boolean name=\"audio_effect_$u\" value=\"false\" />"; done; echo "</map>"; } > $P
+    o=$(stat -c %u $D); chown -R $o:$o $D/shared_prefs; chmod 660 $P; restorecon -R $D/shared_prefs
+  fi
+  grep -q 'audio_effect_[0-9a-f-]*" value="true"' $P && { am force-stop me.phh.treble.app; sed -i 's/\(audio_effect_[0-9a-f-]*" value=\)"true"/\1"false"/' $P; log "turned Treble audio effects off"; }
+}
 # The MTK power HAL rewrites the power mode, boosts and clock limits on touch boosts and screen on/off. Put ours back whenever they drift.
 enforce() {
-  load; calc
+  load; calc; phhfx
   [ "$(cat /proc/cpufreq/cpufreq_power_mode)" != "$(cpm $pm)" ] && w /proc/cpufreq/cpufreq_power_mode $pm
   [ "$(cat /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_fg_boost)" != "$fg" ] && w /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_fg_boost $fg
   g=$governor; [ "$oc" = 1 ] && g=performance

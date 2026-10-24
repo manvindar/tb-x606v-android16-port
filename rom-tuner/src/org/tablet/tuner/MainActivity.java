@@ -300,6 +300,7 @@ public class MainActivity extends Activity {
             new String[]{"off", "auto", "google", "cloudflare", "adguard", "quad9"}, "auto", false);
         rowChoice(c, "Cached app limit", "How many background apps stay in memory", "bg_procs",
             new String[]{"System default", "8", "16", "32", "64"}, new String[]{"default", "8", "16", "32", "64"}, "default", false);
+        rowSwitch(c, "Allow Treble audio effects", "Treble Settings > Audio effects. Left on, app audio can cut out after a few milliseconds.", "phh_effects", "0");
         rowSwitch(c, "ADB over network", "Port 5555 on Wi-Fi. Anyone on the network can connect.", "adb_tcp", "0");
         rowSwitch(c, "Bluetooth MediaTek workaround", "Same as Treble Settings > Misc > Bluetooth. Restarts Bluetooth.", "bt_work", "0");
 
