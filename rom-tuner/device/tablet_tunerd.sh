@@ -35,7 +35,7 @@ icon_pack=$(ovl icon_pack.rounded.android && echo rounded || echo default)
 nav_mode=gestural
 anim_scale=1.0
 density=192
-bootanim=arrow
+bootanim=gemini
 logging=0
 EOS
   for kv in $(presets smooth); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset smooth

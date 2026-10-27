@@ -381,7 +381,7 @@ public class MainActivity extends Activity {
             new String[]{"Stock (240)", "Compact (192)", "Small (213)", "Large (260)", "Largest (280)"},
             new String[]{"reset", "192", "213", "260", "280"}, "192", false);
         rowChoice(c, "Boot animation", null, "bootanim",
-            new String[]{"ArrowOS", "Galaxy", "Aurora ring", "Stock LineageOS"}, new String[]{"arrow", "galaxy", "aurora", "stock"}, "arrow", false);
+            new String[]{"Gemini (Pixel 10)", "ArrowOS", "Galaxy", "Aurora ring", "Stock LineageOS"}, new String[]{"gemini", "arrow", "galaxy", "aurora", "stock"}, "gemini", false);
 
         // ---- System ----
         section("System");

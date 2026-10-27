@@ -14,7 +14,7 @@ ap.add_argument('--gsi', required=True); ap.add_argument('--out', required=True)
 ap.add_argument('--e2fs', default='/opt/homebrew/opt/e2fsprogs/sbin', help='dir with debugfs, e2fsck, resize2fs')
 ap.add_argument('--no-debug', action='store_true', help='keep ro.debuggable=0 / ro.secure=1')
 ap.add_argument('--no-bootdiag', action='store_true')
-ap.add_argument('--with-tuner', action='store_true', help='ROM Tuner app + root daemon + boot animations (ArrowOS default)')
+ap.add_argument('--with-tuner', action='store_true', help='ROM Tuner app + root daemon + boot animations (Gemini default)')
 ap.add_argument('--galaxy', help='bootanimation zip from rom-tuner/boot-animation/make_galaxy.py (optional extra choice)')
 ap.add_argument('--dolby', help='dir with DaxUI.apk, daxService.apk, com.dolby.daxservice.xml (proprietary, not in this repo)')
 a = ap.parse_args()
@@ -74,9 +74,10 @@ if a.with_tuner:
     put(os.path.join(R, 'device', 'tablet_tunerd.sh'), '/system/bin/tablet_tunerd.sh', '755', 0, SYS)
     put(os.path.join(R, 'device', 'tablet_tunerd.rc'), '/system/etc/init/tablet_tunerd.rc', '644', 0, SYS)
     stock = os.path.join(tmp, 'stock.zip'); open(stock, 'wb').write(dbg_cat(media + '/bootanimation.zip'))
-    arrow = os.path.join(R, 'boot-animation', 'bootanimation-arrow.zip')
+    arrow = os.path.join(R, 'boot-animation', 'bootanimation-arrow.zip'); gemini = os.path.join(R, 'boot-animation', 'bootanimation-gemini.zip')
     put(stock, media + '/bootanimation-stock.zip', '644', 0, SYS); put(arrow, media + '/bootanimation-arrow.zip', '644', 0, SYS)
-    put(arrow, media + '/bootanimation.zip', '644', 0, SYS)          # ArrowOS animation is the default; the Tuner copies the chosen one over this file
+    put(gemini, media + '/bootanimation-gemini.zip', '644', 0, SYS)
+    put(gemini, media + '/bootanimation.zip', '644', 0, SYS)         # the Pixel 10 Gemini animation is the default; the Tuner copies the chosen one over this file
     if a.galaxy: put(a.galaxy, media + '/bootanimation-galaxy.zip', '644', 0, SYS)
 
 if a.dolby:
