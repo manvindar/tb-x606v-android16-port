@@ -67,6 +67,13 @@ for lib in ('/system/lib64/libhwui.so', '/system/lib/libhwui.so'):
     run(sys.executable, os.path.join(ROOT, 'patches', 'patch_libhwui.py'), src, src + '.p')
     put(src + '.p', lib, '644', 0, LIB)
 
+# 2c. init.rc starts the UART console shell on debuggable builds; ActivityManager then posts "Serial console enabled, performance is impacted" at every boot.
+#     Start it only when persist.sys.console=1 (ROM Tuner: Serial console shell).
+rc = dbg_cat('/system/etc/init/hw/init.rc').decode(); old = 'on init && property:ro.debuggable=1\n    start console\n'
+if old in rc:
+    src = os.path.join(tmp, 'init.rc'); open(src, 'w').write(rc.replace(old, 'on property:persist.sys.console=1\n    start console\n'))
+    put(src, '/system/etc/init/hw/init.rc', '644', 0, SYS)
+
 if a.with_tuner:
     R = os.path.join(ROOT, 'rom-tuner'); media = '/system/product/media'
     mkdir('/system/app/RomTuner')

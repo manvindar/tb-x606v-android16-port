@@ -94,6 +94,7 @@ ext() {   # $1 key, loaded state
          esac;;
     bg_procs) if [ "$bg_procs" = default ]; then device_config delete activity_manager max_cached_processes; else device_config put activity_manager max_cached_processes $bg_procs; fi;;
     adb_tcp) if [ "$adb_tcp" = 1 ]; then setprop service.adb.tcp.port 5555; else setprop service.adb.tcp.port -1; fi; stop adbd; start adbd;;
+    serial_console) if [ "$serial_console" = 1 ]; then setprop persist.sys.console 1; start console; else setprop persist.sys.console 0; stop console; fi;;
     bt_work) if [ "$bt_work" = 1 ]; then setprop persist.sys.bt.unsupported.commands 182; else setprop persist.sys.bt.unsupported.commands ""; fi
              svc bluetooth disable; sleep 2; svc bluetooth enable;;
   esac
@@ -111,6 +112,7 @@ seedlive() {
   has dns || { m=$(settings get global private_dns_mode); case $m in off) d=off;; hostname) d=auto;; *) d=auto;; esac; putkey dns $d; }
   has bg_procs || putkey bg_procs "$(v "$(device_config get activity_manager max_cached_processes)" default)"
   has adb_tcp || putkey adb_tcp "$([ "$(getprop service.adb.tcp.port)" -gt 0 ] 2>/dev/null && echo 1 || echo 0)"
+  has serial_console || putkey serial_console "$([ "$(getprop init.svc.console)" = running ] && echo 1 || echo 0)"
   has bt_work || putkey bt_work "$([ -n "$(getprop persist.sys.bt.unsupported.commands)" ] && echo 1 || echo 0)"
 }
 cpm() { case $1 in 0) echo 'Default(Normal) mode';; 1) echo 'Low Power mode';; 2) echo 'Just Make mode';; 3) echo 'Performance(Sports) mode';; esac; }
@@ -182,12 +184,12 @@ handle() {
   while IFS== read -r k v; do
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work) ;; *) putkey preset custom;; esac
+    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console) ;; *) putkey preset custom;; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
       governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster) U=1; putkey $k $v;;
-      screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work) putkey $k $v; load; ext $k; continue;;
+      screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
       preset) for kv in $(presets $v); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset $v; P=1; U=1; load; continue;;
       restart_ui) pkill -f com.android.systemui; continue;;

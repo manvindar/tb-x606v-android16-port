@@ -302,6 +302,7 @@ public class MainActivity extends Activity {
             new String[]{"System default", "8", "16", "32", "64"}, new String[]{"default", "8", "16", "32", "64"}, "default", false);
         rowSwitch(c, "Allow Treble audio effects", "Treble Settings > Audio effects. Left on, app audio can cut out after a few milliseconds.", "phh_effects", "0");
         rowSwitch(c, "ADB over network", "Port 5555 on Wi-Fi. Anyone on the network can connect.", "adb_tcp", "0");
+        rowSwitch(c, "Serial console shell", "A root-less shell on the UART. Android shows a performance warning while it runs, so it is off by default.", "serial_console", "0");
         rowSwitch(c, "Bluetooth MediaTek workaround", "Same as Treble Settings > Misc > Bluetooth. Restarts Bluetooth.", "bt_work", "0");
 
         // ---- Appearance ----
