@@ -2,3 +2,4 @@ out/
 gen/
 *.keystore
 rom-tuner/*.idsig
+*.idsig
