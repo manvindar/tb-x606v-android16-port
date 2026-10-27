@@ -384,6 +384,20 @@ public class MainActivity extends Activity {
         rowChoice(c, "Boot animation", null, "bootanim",
             new String[]{"Gemini (Pixel 10)", "ArrowOS", "Galaxy", "Aurora ring", "Stock LineageOS"}, new String[]{"gemini", "arrow", "galaxy", "aurora", "stock"}, "gemini", false);
 
+        // ---- Picture quality (MediaTek MiraVision, applied by restarting the PQ HAL) ----
+        section("Picture quality");
+        c = card();
+        final String[] offOnAuto = {"Off", "On", "Auto"}, offOnAutoV = {"0", "1", "2"};
+        rowChoice(c, "Video dynamic range", "Local contrast boost for video playback", "pq_vp_dre", offOnAuto, offOnAutoV, "1", false);
+        rowChoice(c, "Display dynamic range", "Contrast boost for the whole screen", "pq_dre", offOnAuto, offOnAutoV, "2", false);
+        rowChoice(c, "Ultra resolution", "Upscaling and detail enhancement", "pq_ultrares", offOnAuto, offOnAutoV, "2", false);
+        rowSwitch(c, "HDR video", "HDR to SDR tone mapping for HDR clips", "pq_hdr", "1");
+        rowChoice(c, "Sharpness", "MediaTek sharpness index (2 is the factory value)", "pq_shp",
+            new String[]{"0 (off)", "1", "2 (default)", "3", "4", "5", "6", "7", "8", "9"},
+            new String[]{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}, "2", false);
+        rowChoice(c, "Colour profile", "MediaTek colour index (0 is the factory value)", "pq_color",
+            new String[]{"0 (default)", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0", false);
+
         // ---- System ----
         section("System");
         c = card();

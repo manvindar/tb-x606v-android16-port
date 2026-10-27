@@ -17,6 +17,7 @@ The app opens from the launcher and from the top of the Settings homepage. A "Pe
 | Tuning | Overclock, CPU governor, thermal limits, I/O scheduler, read-ahead, swappiness, TCP congestion control, foreground and top-app boost, big-task rotation, cache pressure, write-back threshold, free memory reserve, swap read-ahead |
 | Appearance | Dark mode, pure black, accent colour, palette style, font, icon shape and icon pack (the last three only when the ROM ships those overlays) |
 | Display and system UI | Navigation mode, animation speed, display size, boot animation |
+| Picture quality | MediaTek MiraVision: video dynamic range, display dynamic range, ultra resolution, HDR video, sharpness index, colour profile index. The PQ HAL reads its `persist.vendor.sys.pq.*` properties only at start, so the daemon sets them and restarts `pq-2-2` when one changes. The sharpness and colour values are MediaTek indexes whose scale is not documented: 2 and 0 are the factory values, try the others by eye |
 | Behaviour | Screen timeout, font size, stay awake while charging, auto-rotate, show taps, window blur, private DNS, cached app limit, Treble audio effects, ADB over network, serial console shell (off by default; it triggers Android's "Serial console enabled, performance is impacted" warning), Bluetooth MediaTek workaround |
 | Actions | Restart System UI, reboot, shortcuts to LineageOS settings screens and Dolby Atmos |
 

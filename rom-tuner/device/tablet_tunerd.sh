@@ -113,7 +113,21 @@ seedlive() {
   has bg_procs || putkey bg_procs "$(v "$(device_config get activity_manager max_cached_processes)" default)"
   has adb_tcp || putkey adb_tcp "$([ "$(getprop service.adb.tcp.port)" -gt 0 ] 2>/dev/null && echo 1 || echo 0)"
   has serial_console || putkey serial_console "$([ "$(getprop init.svc.console)" = running ] && echo 1 || echo 0)"
+  for k in pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+    has $k || { pv=$(getprop persist.vendor.sys.pq.$(pq_prop $k)); [ -n "$pv" ] && putkey $k $pv; }
+  done
   has bt_work || putkey bt_work "$([ -n "$(getprop persist.sys.bt.unsupported.commands)" ] && echo 1 || echo 0)"
+}
+# MediaTek picture quality (MiraVision): the PQ HAL reads these persist props only when it starts, so it is restarted when one changes.
+pq_prop() { case $1 in pq_dre) echo mdp.dre.en;; pq_vp_dre) echo mdp.vp.dre.en;; pq_hdr) echo hdr.en;; pq_ultrares) echo ultrares.en;; pq_shp) echo shp.idx;; pq_color) echo mdp.color.idx;; esac; }
+pq_apply() {
+  ch=0
+  for k in pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+    eval v=\$$k; [ -z "$v" ] && continue
+    p=persist.vendor.sys.pq.$(pq_prop $k)
+    [ "$(getprop $p)" != "$v" ] && { setprop $p $v; ch=1; }
+  done
+  [ $ch = 1 ] && { stop pq-2-2; sleep 1; start pq-2-2; log "picture quality applied"; }
 }
 cpm() { case $1 in 0) echo 'Default(Normal) mode';; 1) echo 'Low Power mode';; 2) echo 'Just Make mode';; 3) echo 'Performance(Sports) mode';; esac; }
 presets() {   # $1 name -> state keys
@@ -180,17 +194,18 @@ handle() {
   trap 'rmdir $LOCK' EXIT
   [ -f $APP/request ] || exit 0
   mv $APP/request $APP/request.work
-  load; T=0; P=0; U=0
+  load; T=0; P=0; U=0; Q=0
   while IFS== read -r k v; do
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console) ;; *) putkey preset custom;; esac
+    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) ;; *) putkey preset custom;; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
       governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster) U=1; putkey $k $v;;
       screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
+      pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
       preset) for kv in $(presets $v); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset $v; P=1; U=1; load; continue;;
       restart_ui) pkill -f com.android.systemui; continue;;
       reboot) sync; reboot; continue;;
@@ -206,7 +221,8 @@ handle() {
   [ $P = 1 ] && profile
   [ $U = 1 ] && tune
   [ $T = 1 ] && theme
-  load; publish
+  load; [ $Q = 1 ] && pq_apply
+  publish
 }
 
 # ---------- daemon ----------
@@ -219,7 +235,7 @@ for f in state request; do [ -f $APP/$f ] || touch $APP/$f; chown $UID_:$UID_ $A
 rm -f $APP/request                          # the app recreates it; inotifyd watches the directory
 w /proc/ppm/policy_status "2 0"; w /proc/ppm/policy_status "3 0"   # FORCE_LIMIT and PWR_THRO off
 w /proc/sys/kernel/printk "1 4 1 7"
-seedlive; load; profile; tune; night_; nav; anim; density_; bootanim; [ "$logging" = 1 ] && logging
+seedlive; load; profile; tune; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
 ( sleep 12; load; black; sleep 25; black ) &
 # Treble Settings > Audio effects attaches DAP, Dynamics Processing, Loudness Enhancer, Visualizer and Downmix to every playback session; on this tablet
 # that cuts app audio after a few ms. Keep them off unless the user allows them (phh_effects=1).
