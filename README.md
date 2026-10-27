@@ -70,7 +70,7 @@ The script copies the GSI, grows it to the partition size, checks the filesystem
 
 | Option | Effect |
 |---|---|
-| `--with-tuner` | Installs ROM Tuner, its root daemon and the boot animations. ArrowOS is the default animation. |
+| `--with-tuner` | Installs ROM Tuner, its root daemon and the boot animations. The Pixel 10 Gemini animation is the default (ArrowOS stays a choice). |
 | `--galaxy FILE` | Adds the generated galaxy animation as a choice (`rom-tuner/boot-animation/make_galaxy.py` renders it). |
 | `--dolby DIR` | Installs Dolby Atmos from `DaxUI.apk`, `daxService.apk` and `com.dolby.daxservice.xml` in `DIR`. These files come from the stock Lenovo firmware and are not in this repository. |
 | `--no-debug` | Keeps `ro.debuggable=0` and `ro.secure=1`. |
@@ -105,4 +105,4 @@ App audio cuts out. Open Treble Settings, Audio effects, and switch every effect
 
 ## Licensing and credits
 
-No license has been chosen for the scripts in this repository. The system image is built from the LineageOS GSI by MisterZtr (LineageOS, TrebleDroid and phh-treble patches). The ArrowOS boot animation comes from the ArrowOS GSI that the tablet ran before. Dolby Atmos and the Lenovo vendor image belong to their owners and are not part of the build recipe. Release assets that contain them are for private use only.
+No license has been chosen for the scripts in this repository. The system image is built from the LineageOS GSI by MisterZtr (LineageOS, TrebleDroid and phh-treble patches). The default boot animation is the Pixel 10 Gemini animation from docbt/GeminiBootAnimation (MIT; see `rom-tuner/boot-animation/NOTICE-gemini.md`); the ArrowOS one comes from the ArrowOS GSI that the tablet ran before. Dolby Atmos and the Lenovo vendor image belong to their owners and are not part of the build recipe. Release assets that contain them (the full ROM and the fixed vendor image) are for private use only, even though the repository is public. The release images were built before the Gemini default and still carry the ArrowOS animation.
