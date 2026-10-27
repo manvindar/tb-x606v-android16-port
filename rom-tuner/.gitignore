@@ -1,3 +1,4 @@
 out/
 gen/
 *.keystore
+rom-tuner/*.idsig
