@@ -6,7 +6,23 @@ APP=/data/data/org.tablet.tuner/files
 LOCK=/data/local/tmp/tuner.lock
 M=/system/product/media
 BLACK=org.lineageos.overlay.customization.blacktheme
+DXS=/system/bin/dexopt_all.sh; DXL=/data/local/tmp/dexopt.log; DXP=/data/local/tmp/dexopt.pid
 log() { echo "$(date +%T) $*" >> /data/local/tmp/tuner.log; }
+
+# ---------- app compile (one-shot, not stored state) ----------
+cstat() {   # idle, running, done (the script prints DONE last) or missing; the pid is checked against the command line so a reused pid does not count
+  p=$(cat $DXP 2>/dev/null)
+  if [ -n "$p" ] && tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | grep -q dexopt_all; then echo running
+  elif [ ! -f $DXS ]; then echo missing
+  elif tail -n 1 $DXL 2>/dev/null | grep -q '^DONE'; then echo done
+  else echo idle; fi
+}
+compile() {   # $1 = "" skips apps that are already compiled, -f recompiles all; refuses to start a second run
+  [ "$(cstat)" = running ] && { log "compile already running"; return; }
+  [ -f $DXS ] || { log "no $DXS"; return; }
+  DEXOPT_FORCE=$1 nohup sh $DXS > $DXL 2>&1 < /dev/null &
+  echo $! > $DXP; log "compile started ($1)"
+}
 
 # ---------- state ----------
 ovl() { cmd overlay list --user 0 | grep -qE "[ .]$1\$"; }   # is this theme overlay installed on this ROM?
@@ -50,7 +66,7 @@ putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
 publish() {   # copy state (+ a status line) to the app; the file is pre-created with the app's owner/context
   [ -f $APP/state ] || return
   gpu_eff=0; [ "$gpu_freq" != 0 ] && [ "$perf_profile" != battery ] && gpu_eff=1
-  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $APP/state
+  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; echo "compile_status=$(cstat)"; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $APP/state
 }
 
 # ---------- appliers ----------
@@ -212,7 +228,7 @@ handle() {
   while IFS== read -r k v; do
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -226,6 +242,8 @@ handle() {
       preset) for kv in $(presets $v); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset $v; putkey profile_active ""; P=1; U=1; load; continue;;
       restart_ui) pkill -f com.android.systemui; continue;;
       reboot) sync; reboot; continue;;
+      compile_now) compile ""; continue;;
+      compile_all) compile -f; continue;;
       *) log "unknown $k"; continue;;
     esac
     load
@@ -280,6 +298,9 @@ enforce() {
   grep -q "^0: min_freq_idx = -1" /proc/ppm/policy/userlimit_min_cpu_freq && { w /proc/ppm/policy/userlimit_min_cpu_freq "0 $minb"; w /proc/ppm/policy/userlimit_min_cpu_freq "1 $minl"; }
   [ "$gpu_eff" = 1 ] && head -1 /proc/gpufreq/gpufreq_opp_freq | grep -q disabled && w /proc/gpufreq/gpufreq_opp_freq $gpu_freq
 }
-( while sleep 5; do enforce; done ) &
+# the compile run ends on its own, so tell the app when its status changes
+CS=
+cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; [ -d $LOCK ] && return; CS=$n; load; publish; }
+( while sleep 5; do enforce; cstat_pub; done ) &
 publish; log "daemon ready"
 exec inotifyd /system/bin/tablet_tunerd.sh $APP:nw   # toybox mask parsing is quirky: single letters are rejected, "wn" drops w

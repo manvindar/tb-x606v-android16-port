@@ -26,9 +26,9 @@ public class MainActivity extends Activity {
     private float dp;
     private String page = HOME;
     private TextView status;
-    private TextView liveCpu, liveGpu, liveMem, liveHeat;
+    private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); ui.postDelayed(this, 1000); } };
+    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); ui.postDelayed(this, 1000); } };
     private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
@@ -213,7 +213,7 @@ public class MainActivity extends Activity {
 
     // ---------- frame ----------
     private void build() {
-        liveCpu = liveGpu = liveMem = liveHeat = null;
+        liveCpu = liveGpu = liveMem = liveHeat = compileView = null;
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(surface());
         LinearLayout outer = new LinearLayout(this);
@@ -293,6 +293,19 @@ public class MainActivity extends Activity {
         long t = -1;
         for (int i = 0; i < 12 && t < 0; i++) if ("mtktscpu".equals(rd("/sys/class/thermal/thermal_zone" + i + "/type"))) t = num(rd("/sys/class/thermal/thermal_zone" + i + "/temp"));
         liveHeat.setText(t < 0 ? "–" : String.format(Locale.US, "%.0f °C", t / 1000f));
+    }
+
+    private static String compileLabel(String s) {
+        switch (s) { case "running": return "Running"; case "done": return "Done"; case "missing": return "Not installed"; default: return "Not run"; }
+    }
+    /** The compile run ends on its own, so the System page re-reads the status key while it is open. */
+    private void refreshCompile() {
+        if (compileView != null) compileView.setText(compileLabel(Cfg.load(this).getOrDefault("compile_status", "idle")));
+    }
+    private void compile(String key) {
+        if ("running".equals(Cfg.load(this).get("compile_status"))) { Toast.makeText(this, "Already running", Toast.LENGTH_SHORT).show(); return; }
+        Cfg.request(this, key, "1");
+        setStatus("Starting…");
     }
 
     private TextView liveCell(LinearLayout c, String label, float weight) {
@@ -585,6 +598,11 @@ public class MainActivity extends Activity {
         row(c, "Widevine", "Decides the streaming quality: L1 allows HD, L3 is limited to about 480p", text(widevine(), 15, true, accent()));
         c = group("Diagnostics");
         rowSwitch(c, "System logging", "Off for speed. Turn on to debug.", "logging", "0");
+        c = group("App speed");
+        compileView = text(compileLabel(get("compile_status", "idle")), 15, true, accent());
+        row(c, "Compile apps now", "Compiles installed apps for faster launches. Takes 10 to 15 minutes, runs in the background. SystemUI and the launcher restart when it finishes the first apps.", compileView)
+            .setOnClickListener(v -> compile("compile_now"));
+        rowAction(c, "Recompile all apps", "Redoes apps that are already compiled too. Use Restart system interface afterwards.", () -> compile("compile_all"));
         c = group("Restart");
         rowAction(c, "Restart system interface", "Re-applies theme changes without rebooting", () -> { Cfg.request(this, "restart_ui", "1"); setStatus("Restarting the interface…"); });
         rowAction(c, "Reboot the tablet", "Needed for a few changes to fully apply", () ->

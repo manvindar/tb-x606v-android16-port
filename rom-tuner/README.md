@@ -19,7 +19,7 @@ The app opens from the launcher and from the top of the Settings homepage. A "Pe
 | Display and system UI | Navigation mode, animation speed, display size, boot animation |
 | Picture quality | MediaTek MiraVision: video dynamic range, display dynamic range, ultra resolution, HDR video, sharpness index, colour profile index. The PQ HAL reads its `persist.vendor.sys.pq.*` properties only at start, so the daemon sets them and restarts `pq-2-2` when one changes. The sharpness and colour values are MediaTek indexes whose scale is not documented: 2 and 0 are the factory values, try the others by eye |
 | Behaviour | Screen timeout, font size, stay awake while charging, auto-rotate, show taps, window blur, private DNS, cached app limit, Treble audio effects, ADB over network, serial console shell (off by default; it triggers Android's "Serial console enabled, performance is impacted" warning), Bluetooth MediaTek workaround |
-| Actions | Restart System UI, reboot, shortcuts to LineageOS settings screens and Dolby Atmos |
+| Actions | Restart System UI, reboot, compile apps now, shortcuts to LineageOS settings screens and Dolby Atmos |
 
 A fresh install starts on the Smooth preset.
 
@@ -44,6 +44,8 @@ The app never writes to the system itself. It appends `key=value` lines to `file
 The MediaTek power HAL rewrites the power mode, the boosts and the minimum clock limits on touch boosts and when the screen changes state. The daemon compares those values every five seconds and writes its own back when they differ. When it sets a profile it writes `cpufreq_power_mode` before the clock limits, because the sports mode resets them.
 
 The daemon also keeps the Treble Settings audio effects switched off. Those effects attach to every playback session and cut app audio after a few milliseconds on this tablet. The "Treble audio effects" switch lets you leave them alone.
+
+Compile apps (System page, "App speed"): the request keys `compile_now` and `compile_all` are one-shot actions, not stored state. The daemon starts `/system/bin/dexopt_all.sh` in the background with `DEXOPT_FORCE=""` (skips apps that are already compiled) or `-f` (recompiles all), writes its output to `/data/local/tmp/dexopt.log` and its pid to `/data/local/tmp/dexopt.pid`, and ignores a second request while one run is alive. The script is not part of this repository or the image builder: it comes from the Android 17 tools and must be installed on the tablet. The daemon publishes `compile_status=idle|running|done|missing` in the state copy (`done` when the log ends with `DONE`, `missing` when the script is not installed) and republishes within five seconds when it changes. A run takes 10 to 15 minutes. After the first apps are compiled the non-forced run restarts SystemUI and the launcher.
 
 The daemon runs as `u:r:su:s0`, so it needs a userdebug ROM or permissive SELinux.
 
