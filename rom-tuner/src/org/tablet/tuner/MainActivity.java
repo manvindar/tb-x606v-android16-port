@@ -759,10 +759,12 @@ public class MainActivity extends Activity {
     }
     /** 0 not compiled, 1 compiled to native code, 2 nothing to compile. */
     private int appGroup(App a) {
-        if (!a.code) return 2;
+        if (!a.code || noDex(a)) return 2;
         return appStates != null && NATIVE.contains(appStates.get(a.pkg)) ? 1 : 0;
     }
-    private String baseState(App a) { return !a.code ? "No code" : appStates == null ? "Loading" : stateLabel(appStates.get(a.pkg)); }
+    /** ART reports "unknown" for packages without a dex file (resource overlays such as android.auto_generated_rro_vendor__ declare no hasCode=false but have no code). */
+    private boolean noDex(App a) { return appStates != null && "unknown".equals(appStates.get(a.pkg)); }
+    private String baseState(App a) { return !a.code || noDex(a) ? "No code" : appStates == null ? "Loading" : stateLabel(appStates.get(a.pkg)); }
     private String stateText(App a) {
         String job = get0(appsSt, "compile_pkg_status"), jp = "", js = "";
         int i = job.lastIndexOf(':');
