@@ -429,9 +429,27 @@ public class MainActivity extends Activity {
             new String[]{"0", "10", "20", "30", "50", "70"}, new String[]{"0", "10", "20", "30", "50", "70"}, "0");
         rowSwitch(c, "Rotate heavy work between fast cores", "Spreads heat", "big_rotation", "0");
         c = group("Power and heat");
+        rowChoice(c, "Power mode", "MediaTek power mode and clock floor. The presets choose it for you.", "perf_profile",
+            new String[]{"Battery (low power)", "Balanced", "Performance (sports)"}, new String[]{"battery", "balanced", "performance"}, "balanced");
         rowSwitch(c, "Overclock", "Pins both CPU clusters at their top speed. Runs hot and drains the battery.", "oc", "0");
         rowChoice(c, "CPU governor", "Used when Overclock is off", "governor", list("govs", "schedplus,ondemand,interactive,performance,powersave"), list("govs", "schedplus,ondemand,interactive,performance,powersave"), "schedplus");
         rowChoice(c, "Thermal limit", "Off removes MediaTek's heat limit. Not recommended while charging.", "thermal", new String[]{"Stock", "Off"}, new String[]{"stock", "off"}, "stock");
+        c = group("Touch and clocks");
+        rowChoice(c, "Touch boost length", "How long the clocks stay raised after a touch. Stock is 100 ms.", "touch_duration_ms",
+            new String[]{"100 ms (stock)", "200 ms", "400 ms", "800 ms"}, new String[]{"100", "200", "400", "800"}, "400");
+        rowChoice(c, "Touch boost clock", "Clock step used during a touch boost. Top clock is the highest, Stock step is the vendor value.", "touch_opp",
+            new String[]{"Top clock", "Middle step", "Stock step"}, new String[]{"0", "1", "2"}, "0");
+        rowChoice(c, "Touch boost strength", "How hard a touch pushes the clocks up, 0 to 100. Stock is 80.", "touch_boost",
+            new String[]{"Off", "20", "40", "60", "80 (stock)", "100"}, new String[]{"0", "20", "40", "60", "80", "100"}, "100");
+        rowChoice(c, "Clock drop delay", "How long a clock is held before it is lowered. Longer keeps short bursts smooth. Stock is 4 ms. Needs the schedplus governor.", "down_throttle",
+            new String[]{"4 ms (stock)", "10 ms", "20 ms", "40 ms"}, new String[]{"4", "10", "20", "40"}, "20");
+        rowChoice(c, "Clock rise delay", "Minimum time between clock increases. Stock is none. Needs the schedplus governor.", "up_throttle",
+            new String[]{"None (stock)", "2 ms", "5 ms"}, new String[]{"0", "2", "5"}, "0");
+        rowChoice(c, "Clock headroom", "How far above the measured load the scheduler sets the clock. Stock is 1.25x. More is smoother and uses more power.", "cap_margin",
+            new String[]{"1.0x", "1.25x (stock)", "1.5x", "1.75x"}, new String[]{"1024", "1280", "1536", "1792"}, "1536");
+        c = group("Idle and statistics");
+        rowSwitch(c, "Deep idle (MCDI)", "Turning it off cuts wake up delay and costs idle battery.", "mcdi", "1");
+        rowSwitch(c, "Scheduler statistics", "Kernel counters used by profilers. Off saves a little CPU time.", "schedstats", "0");
     }
 
     private void pageMemory() {
@@ -449,8 +467,12 @@ public class MainActivity extends Activity {
             new String[]{"None", "24 MB", "48 MB", "96 MB"}, new String[]{"0", "24576", "49152", "98304"}, "49152");
         rowChoice(c, "Swap read-ahead", "Pages read back from compressed memory at once", "page_cluster",
             new String[]{"1 (stock)", "2", "4", "8"}, new String[]{"0", "1", "2", "3"}, "0");
-        rowChoice(c, "Background apps kept", "How many background apps stay in memory", "bg_procs",
+        rowChoice(c, "Memory watermark", "How early the kernel frees memory in the background. Higher keeps more free and caches less. Stock is 10.", "watermark",
+            new String[]{"10 (stock)", "20", "30"}, new String[]{"10", "20", "30"}, "10");
+        rowChoice(c, "Background apps kept", "How many background apps stay in memory, set through device config.", "bg_procs",
             new String[]{"System default", "8", "16", "32", "64"}, new String[]{"default", "8", "16", "32", "64"}, "default");
+        rowChoice(c, "Cached app limit", "The same kind of limit, set through the Settings database. Use this or Background apps kept, not both. Android may ignore one of them.", "cached_apps",
+            new String[]{"System default", "16", "24", "32", "48"}, new String[]{"default", "16", "24", "32", "48"}, "default");
     }
 
     private void pagePicture() {
@@ -563,7 +585,11 @@ public class MainActivity extends Activity {
     }
 
     private void pageConnect() {
-        LinearLayout c = group("Network");
+        LinearLayout c = group("Wi-Fi");
+        rowChoice(c, "Country code", "Sets the allowed Wi-Fi channels and power. Pick the country you are in. Applied again after every boot.", "wifi_country",
+            new String[]{"Automatic", "Canada", "United States", "United Kingdom", "Germany", "France", "India", "Australia", "Japan", "Mexico", "Brazil"},
+            new String[]{"auto", "CA", "US", "GB", "DE", "FR", "IN", "AU", "JP", "MX", "BR"}, "CA");
+        c = group("Network");
         rowChoice(c, "Private DNS", null, "dns",
             new String[]{"Off", "Automatic", "Google", "Cloudflare", "AdGuard (blocks ads)", "Quad9"}, new String[]{"off", "auto", "google", "cloudflare", "adguard", "quad9"}, "auto");
         rowChoice(c, "TCP congestion control", "How fast downloads ramp up", "tcp_cc", list("tcps", "bic,cubic,reno"), list("tcps", "bic,cubic,reno"), "bic");

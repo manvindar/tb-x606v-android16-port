@@ -13,12 +13,14 @@ The app opens from the launcher and from the top of the Settings homepage. A "Pe
 | Section | Options |
 |---|---|
 | Presets | Battery saver, Balanced, Smooth, Performance, Extreme |
-| Performance | Profile (battery, balanced, performance), GPU clock, maximum clock for the fast and the efficiency cores |
-| Tuning | Overclock, CPU governor, thermal limits, I/O scheduler, read-ahead, swappiness, TCP congestion control, foreground and top-app boost, big-task rotation, cache pressure, write-back threshold, free memory reserve, swap read-ahead |
+| Performance | Power mode (battery, balanced, performance), GPU clock, maximum clock for the fast and the efficiency cores |
+| Tuning | Overclock, CPU governor, thermal limits, I/O scheduler, read-ahead, swappiness, TCP congestion control, foreground and top-app boost, big-task rotation, cache pressure, write-back threshold, free memory reserve, swap read-ahead, memory watermark |
+| Touch and clocks | Touch boost length, clock step and strength, clock drop and rise delay and clock headroom of the schedplus governor, deep idle (MCDI), scheduler statistics |
+| Wi-Fi | Country code (Automatic, CA, US, GB, DE, FR, IN, AU, JP, MX, BR) |
 | Appearance | Dark mode, pure black, accent colour, palette style, font, icon shape and icon pack (the last three only when the ROM ships those overlays) |
 | Display and system UI | Navigation mode, animation speed, display size, boot animation |
 | Picture quality | MediaTek MiraVision: video dynamic range, display dynamic range, ultra resolution, HDR video, sharpness index, colour profile index. The PQ HAL reads its `persist.vendor.sys.pq.*` properties only at start, so the daemon sets them and restarts `pq-2-2` when one changes. The sharpness and colour values are MediaTek indexes whose scale is not documented: 2 and 0 are the factory values, try the others by eye |
-| Behaviour | Screen timeout, font size, stay awake while charging, auto-rotate, show taps, window blur, private DNS, cached app limit, Treble audio effects, ADB over network, serial console shell (off by default; it triggers Android's "Serial console enabled, performance is impacted" warning), Bluetooth MediaTek workaround |
+| Behaviour | Screen timeout, font size, stay awake while charging, auto-rotate, show taps, window blur, private DNS, background apps kept, cached app limit, Treble audio effects, ADB over network, serial console shell (off by default; it triggers Android's "Serial console enabled, performance is impacted" warning), Bluetooth MediaTek workaround |
 | Actions | Restart System UI, reboot, compile apps now, shortcuts to LineageOS settings screens and Dolby Atmos |
 
 A fresh install starts on the Smooth preset.
@@ -46,6 +48,29 @@ The MediaTek power HAL rewrites the power mode, the boosts and the minimum clock
 The daemon also keeps the Treble Settings audio effects switched off. Those effects attach to every playback session and cut app audio after a few milliseconds on this tablet. The "Treble audio effects" switch lets you leave them alone.
 
 Compile apps (System page, "App speed"): the request keys `compile_now` and `compile_all` are one-shot actions, not stored state. The daemon starts `/system/bin/dexopt_all.sh` in the background with `DEXOPT_FORCE=""` (skips apps that are already compiled) or `-f` (recompiles all), writes its output to `/data/local/tmp/dexopt.log` and its pid to `/data/local/tmp/dexopt.pid`, and ignores a second request while one run is alive. The script is not part of this repository or the image builder: it comes from the Android 17 tools and must be installed on the tablet. The daemon publishes `compile_status=idle|running|done|missing` in the state copy (`done` when the log ends with `DONE`, `missing` when the script is not installed) and republishes within five seconds when it changes. A run takes 10 to 15 minutes. After the first apps are compiled the non-forced run restarts SystemUI and the launcher.
+
+Touch and clocks, idle, memory watermark (Performance and Memory pages) are stored with the preset and in saved profiles. Each has a fixed list of allowed values, checked in `valid` when a request arrives and again by `sane` before a write, so a bad value in the state file falls back to its default. Writes go through `wn`, which skips a node that does not exist.
+
+| Key | Allowed values | Default | Stock | Written to |
+|---|---|---|---|---|
+| `touch_duration_ms` | 100, 200, 400, 800 | 400 | 100 | `/proc/perfmgr/tchbst/user/usrtch`, line `duration <ns>` |
+| `touch_opp` | 0, 1, 2 (0 is the top clock) | 0 | 2 | same file, line `touch_opp` |
+| `touch_boost` | 0 to 100 | 100 | 80 | same file, line `init` |
+| `schedstats` | 0, 1 | 0 | 0 | `/proc/sys/kernel/sched_schedstats` |
+| `down_throttle` | 4, 10, 20, 40 (ms) | 20 | 4 | `/sys/devices/system/cpu/cpufreq/policy{0,4}/sched/down_throttle_nsec` |
+| `up_throttle` | 0, 2, 5 (ms) | 0 | 0 | same directory, `up_throttle_nsec` |
+| `cap_margin` | 1024, 1280, 1536, 1792 | 1536 | 1280 (1.25x) | `/sys/devices/system/cpu/eas/cap_margin_dvfs` |
+| `mcdi` | 1 (on), 0 (off) | 1 | 1 | `cpu*/cpuidle/state1/disable`, written as 1 minus the value |
+| `watermark` | 10, 20, 30 | 10 | 10 | `/proc/sys/vm/watermark_scale_factor` |
+
+The two throttle files only exist while the governor is schedplus, and the governor forgets them when it is set again, so `tune` writes them after the governor and `enforce` writes them again whenever it has to put the governor back. Battery and Balanced use the stock column, Smooth, Performance and Extreme use the default column. `min_free_kbytes` is left alone.
+
+Two settings are not in presets or profiles because they are about the place and the Android framework, not the speed:
+
+- `wifi_country`: Automatic or one of CA, US, GB, DE, FR, IN, AU, JP, MX, BR, default CA. The daemon runs `cmd wifi force-country-code enabled XX` (`disabled` for Automatic). The override is only kept in memory, so the daemon sets it again whenever it sees a new `system_server` pid (the first run after boot included), retrying every 5 seconds for a minute while the Wi-Fi service starts, and when the value changes.
+- `cached_apps`: Default, 16, 24, 32 or 48, written to `settings put global activity_manager_constants max_cached_processes=N` (other constants in that string are kept; Default removes only this one). This is separate from `bg_procs` (Background apps kept), which uses `device_config put activity_manager max_cached_processes`. They are two stores for the same limit and Android may prefer the device config one, so set only one of them. At boot the daemon applies it only when it is not Default.
+
+An existing install gets the new keys on the next daemon start, with the values of its current preset.
 
 The daemon runs as `u:r:su:s0`, so it needs a userdebug ROM or permissive SELinux.
 

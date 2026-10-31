@@ -53,6 +53,8 @@ anim_scale=1.0
 density=192
 bootanim=gemini
 logging=0
+wifi_country=CA
+cached_apps=default
 EOS
   for kv in $(presets smooth); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset smooth
 }
@@ -60,6 +62,7 @@ load() {
   . $S
   [ -z "$gpu_freq" ] && gpu_freq=$([ "$gpu_lock" = 0 ] && echo 0 || echo 680000)
   : ${fg_boost:=auto} ${ta_boost:=0} ${big_rotation:=0} ${vfs_cache:=50} ${dirty:=1} ${extra_free:=49152} ${page_cluster:=0}
+  : ${touch_duration_ms:=400} ${touch_opp:=0} ${touch_boost:=100} ${schedstats:=0} ${down_throttle:=20} ${up_throttle:=0} ${cap_margin:=1536} ${mcdi:=1} ${watermark:=10} ${wifi_country:=CA} ${cached_apps:=default}
   : ${phh_effects:=0} ${governor:=schedplus} ${oc:=0} ${thermal:=stock} ${io_sched:=deadline} ${readahead:=512} ${swappiness:=100} ${tcp_cc:=bic}
 }
 putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
@@ -109,6 +112,11 @@ ext() {   # $1 key, loaded state
               settings put global private_dns_specifier $h; settings put global private_dns_mode hostname;;
          esac;;
     bg_procs) if [ "$bg_procs" = default ]; then device_config delete activity_manager max_cached_processes; else device_config put activity_manager max_cached_processes $bg_procs; fi;;
+    cached_apps) cur=$(settings get global activity_manager_constants); [ "$cur" = null ] && cur=
+                 rest=$(echo "$cur" | tr , '\n' | grep -v '^max_cached_processes=' | tr '\n' , | sed 's/,$//')   # keep other constants
+                 [ "$cached_apps" != default ] && rest="max_cached_processes=$cached_apps${rest:+,$rest}"
+                 if [ -n "$rest" ]; then settings put global activity_manager_constants "$rest"; else settings delete global activity_manager_constants; fi;;
+    wifi_country) ( trap - EXIT; wifi_apply ) &;;
     adb_tcp) if [ "$adb_tcp" = 1 ]; then setprop service.adb.tcp.port 5555; else setprop service.adb.tcp.port -1; fi; stop adbd; start adbd;;
     serial_console) if [ "$serial_console" = 1 ]; then setprop persist.sys.console 1; start console; else setprop persist.sys.console 0; stop console; fi;;
     bt_work) if [ "$bt_work" = 1 ]; then setprop persist.sys.bt.unsupported.commands 182; else setprop persist.sys.bt.unsupported.commands ""; fi
@@ -132,6 +140,10 @@ seedlive() {
   for k in pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
     has $k || { pv=$(getprop persist.vendor.sys.pq.$(pq_prop $k)); [ -n "$pv" ] && putkey $k $pv; }
   done
+  # keys added later: an existing install takes the values of its current preset (stock for battery and balanced)
+  for kv in $(tweakset $(sed -n 's/^preset=//p' $S)); do has ${kv%%=*} || putkey ${kv%%=*} ${kv#*=}; done
+  has wifi_country || putkey wifi_country CA
+  has cached_apps || putkey cached_apps default
   has bt_work || putkey bt_work "$([ -n "$(getprop persist.sys.bt.unsupported.commands)" ] && echo 1 || echo 0)"
 }
 # MediaTek picture quality (MiraVision): the PQ HAL reads these persist props only when it starts, so it is restarted when one changes.
@@ -147,7 +159,7 @@ pq_apply() {
 }
 # saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory and picture keys, not the look.
 PF=/data/local/tmp/tuner.profiles
-PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color"
+PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color"
 profile_save() {   # $1 name
   [ -f $PF ] && grep -v "^$1|" $PF > $PF.t || : > $PF.t
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done
@@ -160,14 +172,68 @@ profile_apply() {  # $1 name -> state keys
   putkey preset custom; putkey profile_active "$1"; log "applied profile $1"
 }
 cpm() { case $1 in 0) echo 'Default(Normal) mode';; 1) echo 'Low Power mode';; 2) echo 'Just Make mode';; 3) echo 'Performance(Sports) mode';; esac; }
+# validation: only these values reach a node or a command. Keys without a rule pass (they were checked by the character set).
+oneof() { v_=$1; shift; for x_ in "$@"; do [ "$v_" = "$x_" ] && return 0; done; return 1; }
+valid() {   # $1 key, $2 value
+  case $1 in
+    wifi_country) oneof "$2" auto CA US GB DE FR IN AU JP MX BR;;
+    touch_duration_ms) oneof "$2" 100 200 400 800;;
+    touch_opp) oneof "$2" 0 1 2;;
+    touch_boost) case $2 in 0|[1-9]|[1-9][0-9]|100) return 0;; esac; return 1;;
+    schedstats|mcdi) oneof "$2" 0 1;;
+    down_throttle) oneof "$2" 4 10 20 40;;
+    up_throttle) oneof "$2" 0 2 5;;
+    cap_margin) oneof "$2" 1024 1280 1536 1792;;
+    watermark) oneof "$2" 10 20 30;;
+    cached_apps) oneof "$2" default 16 24 32 48;;
+    *) return 0;;
+  esac
+}
+tweakset() {   # $1 preset -> touch boost, clock behaviour, idle, scheduler and watermark keys: stock for battery and balanced, the tuned defaults otherwise
+  case $1 in
+    battery|balanced) echo "touch_duration_ms=100 touch_opp=2 touch_boost=80 schedstats=0 down_throttle=4 up_throttle=0 cap_margin=1280 mcdi=1 watermark=10";;
+    *)                echo "touch_duration_ms=400 touch_opp=0 touch_boost=100 schedstats=0 down_throttle=20 up_throttle=0 cap_margin=1536 mcdi=1 watermark=10";;
+  esac
+}
 presets() {   # $1 name -> state keys
   case $1 in
-    battery)     echo "perf_profile=battery gpu_freq=0 oc=0 governor=schedplus thermal=stock fg_boost=auto ta_boost=0 big_rotation=0 cap_big=1484000 cap_little=1050000 dirty=5 swappiness=100 vfs_cache=100 extra_free=24576";;
-    balanced)    echo "perf_profile=balanced gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=auto ta_boost=0 big_rotation=0 cap_big=-1 cap_little=-1 dirty=1 swappiness=100 vfs_cache=50 extra_free=49152";;
-    smooth)      echo "perf_profile=performance gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=60 ta_boost=30 big_rotation=0 cap_big=-1 cap_little=-1 dirty=10 swappiness=100 vfs_cache=50 extra_free=98304";;
-    performance) echo "perf_profile=performance gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=100 ta_boost=70 big_rotation=0 cap_big=-1 cap_little=-1 dirty=20 swappiness=60 vfs_cache=50 extra_free=98304";;
-    extreme)     echo "perf_profile=performance gpu_freq=680000 oc=1 governor=performance thermal=off fg_boost=100 ta_boost=70 big_rotation=0 cap_big=-1 cap_little=-1 dirty=20 swappiness=60 vfs_cache=50 extra_free=98304 readahead=1024";;
+    battery)     echo "perf_profile=battery gpu_freq=0 oc=0 governor=schedplus thermal=stock fg_boost=auto ta_boost=0 big_rotation=0 cap_big=1484000 cap_little=1050000 dirty=5 swappiness=100 vfs_cache=100 extra_free=24576 $(tweakset battery)";;
+    balanced)    echo "perf_profile=balanced gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=auto ta_boost=0 big_rotation=0 cap_big=-1 cap_little=-1 dirty=1 swappiness=100 vfs_cache=50 extra_free=49152 $(tweakset balanced)";;
+    smooth)      echo "perf_profile=performance gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=60 ta_boost=30 big_rotation=0 cap_big=-1 cap_little=-1 dirty=10 swappiness=100 vfs_cache=50 extra_free=98304 $(tweakset smooth)";;
+    performance) echo "perf_profile=performance gpu_freq=680000 oc=0 governor=schedplus thermal=stock fg_boost=100 ta_boost=70 big_rotation=0 cap_big=-1 cap_little=-1 dirty=20 swappiness=60 vfs_cache=50 extra_free=98304 $(tweakset performance)";;
+    extreme)     echo "perf_profile=performance gpu_freq=680000 oc=1 governor=performance thermal=off fg_boost=100 ta_boost=70 big_rotation=0 cap_big=-1 cap_little=-1 dirty=20 swappiness=60 vfs_cache=50 extra_free=98304 readahead=1024 $(tweakset extreme)";;
   esac
+}
+# w for nodes that may be missing (schedplus nodes only exist while that governor runs): skipped quietly when absent
+wn() { [ -w "$1" ] && w "$1" "$2"; }
+sane() { eval sv=\$$1; valid $1 "$sv" || eval $1=$2; }   # a bad value in the state file falls back to the default instead of reaching a node
+sched_clocks() {   # the schedplus governor forgets these when the governor is set again
+  sane down_throttle 20; sane up_throttle 0
+  for dd in 0 4; do
+    wn /sys/devices/system/cpu/cpufreq/policy$dd/sched/down_throttle_nsec $((down_throttle * 1000000))
+    wn /sys/devices/system/cpu/cpufreq/policy$dd/sched/up_throttle_nsec $((up_throttle * 1000000))
+  done
+}
+newtune() {   # touch boost, schedplus clocks, idle, scheduler statistics, watermark
+  sane touch_duration_ms 400; sane touch_opp 0; sane touch_boost 100; sane schedstats 0; sane down_throttle 20
+  sane up_throttle 0; sane cap_margin 1536; sane mcdi 1; sane watermark 10
+  TB=/proc/perfmgr/tchbst/user/usrtch
+  wn $TB "duration $((touch_duration_ms * 1000000))"; wn $TB "touch_opp $touch_opp"; wn $TB "init $touch_boost"
+  wn /proc/sys/kernel/sched_schedstats $schedstats
+  wn /proc/sys/vm/watermark_scale_factor $watermark
+  wn /sys/devices/system/cpu/eas/cap_margin_dvfs $cap_margin
+  for ff in /sys/devices/system/cpu/cpu[0-9]*/cpuidle/state1/disable; do wn $ff $((1 - mcdi)); done   # state1 is MCDI; 1 disables it
+  sched_clocks
+}
+wifi_apply() {   # the country override lives in memory, so it is set again after every boot or system_server restart; Wi-Fi may not be ready yet
+  n=0
+  while [ $n -lt 12 ]; do
+    load; valid wifi_country "$wifi_country" || return
+    if [ "$wifi_country" = auto ]; then o=$(cmd wifi force-country-code disabled 2>&1); else o=$(cmd wifi force-country-code enabled $wifi_country 2>&1); fi
+    [ $? = 0 ] && ! echo "$o" | grep -qiE "can't find|exception|error|unknown|usage" && { log "wifi country $wifi_country"; return; }
+    n=$((n + 1)); sleep 5
+  done
+  log "wifi country not applied: $o"
 }
 tune() {   # governor, overclock, thermal, I/O, memory, network
   g=$governor; [ "$oc" = 1 ] && g=performance
@@ -182,6 +248,7 @@ tune() {   # governor, overclock, thermal, I/O, memory, network
   w /proc/sys/vm/dirty_ratio $dirty; w /proc/sys/vm/dirty_background_ratio $((dirty > 1 ? dirty / 2 : 1))
   w /proc/sys/vm/extra_free_kbytes $extra_free; w /proc/sys/vm/page-cluster $page_cluster
   if [ "$thermal" = off ]; then w /proc/ppm/policy_status "4 0"; else w /proc/ppm/policy_status "4 1"; fi
+  newtune
 }
 theme() {
   K=android.theme.customization
@@ -227,13 +294,14 @@ handle() {
   load; T=0; P=0; U=0; Q=0
   while IFS== read -r k v; do
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
+    valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
-      governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster) U=1; putkey $k $v;;
-      screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
+      governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster|touch_duration_ms|touch_opp|touch_boost|schedstats|down_throttle|up_throttle|cap_margin|mcdi|watermark) U=1; putkey $k $v;;
+      screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
       pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
       save_profile) profile_save $v; putkey profile_active $v; load; continue;;
@@ -270,7 +338,7 @@ for f in state request; do [ -f $APP/$f ] || touch $APP/$f; chown $UID_:$UID_ $A
 rm -f $APP/request                          # the app recreates it; inotifyd watches the directory
 w /proc/ppm/policy_status "2 0"; w /proc/ppm/policy_status "3 0"   # FORCE_LIMIT and PWR_THRO off
 w /proc/sys/kernel/printk "1 4 1 7"
-seedlive; load; profile; tune; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
+seedlive; load; profile; tune; [ "$cached_apps" != default ] && ext cached_apps; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
 ( sleep 12; load; black; sleep 25; black ) &
 # Treble Settings > Audio effects attaches DAP, Dynamics Processing, Loudness Enhancer, Visualizer and Downmix to every playback session; on this tablet
 # that cuts app audio after a few ms. Keep them off unless the user allows them (phh_effects=1).
@@ -293,7 +361,9 @@ enforce() {
   [ "$(cat /proc/cpufreq/cpufreq_power_mode)" != "$(cpm $pm)" ] && w /proc/cpufreq/cpufreq_power_mode $pm
   [ "$(cat /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_fg_boost)" != "$fg" ] && w /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_fg_boost $fg
   g=$governor; [ "$oc" = 1 ] && g=performance
-  for p in 0 4; do [ "$(cat /sys/devices/system/cpu/cpu$p/cpufreq/scaling_governor)" != "$g" ] && w /sys/devices/system/cpu/cpu$p/cpufreq/scaling_governor $g; done
+  gc=; for p in 0 4; do [ "$(cat /sys/devices/system/cpu/cpu$p/cpufreq/scaling_governor)" != "$g" ] && { w /sys/devices/system/cpu/cpu$p/cpufreq/scaling_governor $g; gc=1; }; done
+  [ -n "$gc" ] && sched_clocks
+  sp=$(pidof system_server); [ -n "$sp" ] && [ "$sp" != "$SSPID" ] && { SSPID=$sp; ( trap - EXIT; wifi_apply ) & }   # also covers the first run after boot
   [ "$perf_profile" = battery ] && return
   grep -q "^0: min_freq_idx = -1" /proc/ppm/policy/userlimit_min_cpu_freq && { w /proc/ppm/policy/userlimit_min_cpu_freq "0 $minb"; w /proc/ppm/policy/userlimit_min_cpu_freq "1 $minl"; }
   [ "$gpu_eff" = 1 ] && head -1 /proc/gpufreq/gpufreq_opp_freq | grep -q disabled && w /proc/gpufreq/gpufreq_opp_freq $gpu_freq
