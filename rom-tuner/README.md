@@ -21,7 +21,7 @@ The app opens from the launcher and from the top of the Settings homepage. A "Pe
 | Display and system UI | Navigation mode, animation speed, display size, boot animation |
 | Picture quality | MediaTek MiraVision: video dynamic range, display dynamic range, ultra resolution, HDR video, sharpness index, colour profile index. The PQ HAL reads its `persist.vendor.sys.pq.*` properties only at start, so the daemon sets them and restarts `pq-2-2` when one changes. The sharpness and colour values are MediaTek indexes whose scale is not documented: 2 and 0 are the factory values, try the others by eye |
 | Behaviour | Screen timeout, font size, stay awake while charging, auto-rotate, show taps, window blur, private DNS, background apps kept, cached app limit, Treble audio effects, ADB over network, serial console shell (off by default; it triggers Android's "Serial console enabled, performance is impacted" warning), Bluetooth MediaTek workaround |
-| Actions | Restart System UI, reboot, compile apps now, shortcuts to LineageOS settings screens and Dolby Atmos |
+| Actions | Restart System UI, reboot, compile apps now, per app compile (System, App speed), shortcuts to LineageOS settings screens and Dolby Atmos |
 
 A fresh install starts on the Smooth preset.
 
@@ -48,6 +48,30 @@ The MediaTek power HAL rewrites the power mode, the boosts and the minimum clock
 The daemon also keeps the Treble Settings audio effects switched off. Those effects attach to every playback session and cut app audio after a few milliseconds on this tablet. The "Treble audio effects" switch lets you leave them alone.
 
 Compile apps (System page, "App speed"): the request keys `compile_now` and `compile_all` are one-shot actions, not stored state. The daemon starts `/system/bin/dexopt_all.sh` in the background with `DEXOPT_FORCE=""` (skips apps that are already compiled) or `-f` (recompiles all), writes its output to `/data/local/tmp/dexopt.log` and its pid to `/data/local/tmp/dexopt.pid`, and ignores a second request while one run is alive. The script is not part of this repository or the image builder: it comes from the Android 17 tools and must be installed on the tablet. The daemon publishes `compile_status=idle|running|done|missing` in the state copy (`done` when the log ends with `DONE`, `missing` when the script is not installed) and republishes within five seconds when it changes. A run takes 10 to 15 minutes. After the first apps are compiled the non-forced run restarts SystemUI and the launcher.
+
+Per app compile (System page, "App speed", "Per app compile"): the screen lists every enabled installed app, user and system, with its compile state, a search box and the filter All, Not compiled, Compiled. The app list comes from `PackageManager` (the manifest asks for `QUERY_ALL_PACKAGES`). The compile states cannot be read by the app, so the daemon writes them to `files/apps_state`: one `package=filter` line per package and a last line `apps_state_time=<epoch>`. The app treats a file without that last line as broken (partly written), keeps the list it had, and shows "Loading compile states" while it sends `refresh_apps=1`. Sorting is not compiled first, then compiled, then apps without code, each by label. "Compiled" means a native code filter: speed, speed-profile, everything, space and their `-profile` forms. Verify, quicken, run-from-apk, error, unknown and a package missing from the dump count as not compiled. "Compile all not compiled" sends `compile_now`, which only skips apps that are already at speed or better, so apps at speed-profile are compiled again.
+
+Tapping an app opens a dialog with Compile (speed), Compile (speed profile), Reset and Cancel. The request keys are one-shot like `compile_now`:
+
+| Key | Value | Does |
+|---|---|---|
+| `compile_pkg` | package name | `cmd package compile -m speed -f <pkg>`, then the stale copy cleanup and `am force-stop <pkg>` |
+| `compile_pkg_profile` | package name | the same with `-m speed-profile` |
+| `reset_pkg` | package name | `cmd package compile --reset <pkg>` (no cleanup or force-stop) |
+| `refresh_apps` | `1` | rebuilds `apps_state` in the background (several seconds) |
+
+The package name must match `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$` (checked in `pkgok`, on top of the general character set check) and `pm path <pkg>` must succeed, both when the request arrives and again when the job starts. Jobs go into `/data/local/tmp/tuner.queue` and one background worker runs them one at a time; the directory `/data/local/tmp/tuner.q.lock` marks a live worker. A request while `compile_now` or `compile_all` runs is refused (status `failed`), and `compile_now` or `compile_all` is refused while the worker runs. The state copy gets these keys:
+
+| Key | Values |
+|---|---|
+| `compile_pkg_status` | `<package>:running`, `<package>:done` or `<package>:failed` for the latest job only |
+| `compile_queue` | comma separated packages that are waiting (the running one is not in it) |
+| `apps_state_time` | epoch seconds of the last time `apps_state` was written |
+| `apps_refresh` | `running`, `failed` (neither dump command gave output) or `idle` |
+
+The cleanup after a compile is the `fixcache` step of `dexopt_all.sh` for one package: when an odex sits next to a system apk, `/data/dalvik-cache/arm64/<apk path with / as @>@classes.*` is deleted so the next start uses the odex. The tuner app itself is not force-stopped, because that would close its own screen. After each job the daemon re-reads that one package and replaces its line, and it rebuilds the whole list when a `compile_now` or `compile_all` run ends and when the app asks.
+
+The list is parsed from `cmd package art dump` (`dumpsys package dexopt` if that prints nothing): a `[com.x]` header line, then `path:` blocks with `arm64: [status=speed-profile] [reason=bg-dexopt] [primary-abi]`. The status on the first such line after a header is taken (the base apk). The header may be indented. `sh tests/test_apps.sh` runs the parser, the name check, the queue worker and the state file against stubs of `cmd`, `pm` and `am`, with no device.
 
 Touch and clocks, idle, memory watermark (Performance and Memory pages) are stored with the preset and in saved profiles. Each has a fixed list of allowed values, checked in `valid` when a request arrives and again by `sane` before a write, so a bad value in the state file falls back to its default. Writes go through `wn`, which skips a node that does not exist.
 

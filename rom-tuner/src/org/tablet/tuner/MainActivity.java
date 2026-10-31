@@ -4,16 +4,24 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.inputmethod.EditorInfo;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 
@@ -28,7 +36,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); ui.postDelayed(this, 1000); } };
+    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshApps(); ui.postDelayed(this, 1000); } };
     private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
@@ -53,7 +61,9 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(tick); }
 
-    @Override public void onBackPressed() { if (!HOME.equals(page)) go(HOME); else super.onBackPressed(); }
+    @Override public void onBackPressed() { if (!HOME.equals(page)) go(parentPage()); else super.onBackPressed(); }
+
+    private String parentPage() { return "apps".equals(page) ? "system" : HOME; }
 
     // ---------- state ----------
     private String get(String k, String def) { String v = st.get(k); return v == null || v.isEmpty() ? def : v; }
@@ -214,6 +224,7 @@ public class MainActivity extends Activity {
     // ---------- frame ----------
     private void build() {
         liveCpu = liveGpu = liveMem = liveHeat = compileView = null;
+        appsBox = null; appsInfo = null;
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(surface());
         LinearLayout outer = new LinearLayout(this);
@@ -232,7 +243,7 @@ public class MainActivity extends Activity {
         if (!HOME.equals(page)) {
             TextView back = text("‹", 34, false, accent());
             back.setPadding(0, 0, px(14), px(4));
-            back.setOnClickListener(v -> go(HOME));
+            back.setOnClickListener(v -> go(parentPage()));
             head.addView(back);
         }
         head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(), HOME.equals(page) ? 30 : 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
@@ -249,6 +260,7 @@ public class MainActivity extends Activity {
             case "display": pageDisplay(); break;
             case "connect": pageConnect(); break;
             case "system": pageSystem(); break;
+            case "apps": pageApps(); break;
             default: pageHome();
         }
         setContentView(sv);
@@ -262,6 +274,7 @@ public class MainActivity extends Activity {
             case "look": return "Look";
             case "display": return "Display and touch";
             case "connect": return "Connections";
+            case "apps": return "App speed";
             default: return "System";
         }
     }
@@ -303,7 +316,9 @@ public class MainActivity extends Activity {
         if (compileView != null) compileView.setText(compileLabel(Cfg.load(this).getOrDefault("compile_status", "idle")));
     }
     private void compile(String key) {
-        if ("running".equals(Cfg.load(this).get("compile_status"))) { Toast.makeText(this, "Already running", Toast.LENGTH_SHORT).show(); return; }
+        Map<String, String> s = Cfg.load(this);
+        if ("running".equals(s.get("compile_status"))) { Toast.makeText(this, "Already running", Toast.LENGTH_SHORT).show(); return; }
+        if (!get0(s, "compile_queue").isEmpty() || get0(s, "compile_pkg_status").endsWith(":running")) { Toast.makeText(this, "An app is compiling. Wait for it to finish.", Toast.LENGTH_SHORT).show(); return; }
         Cfg.request(this, key, "1");
         setStatus("Starting…");
     }
@@ -612,6 +627,218 @@ public class MainActivity extends Activity {
         } catch (Throwable t) { android.util.Log.i("RomTuner", "widevine failed " + t); return "unavailable"; }
     }
 
+    // ---------- per app compile ----------
+    private static class App { String pkg, label; boolean system, code; }
+    private static final HashSet<String> NATIVE = new HashSet<>(Arrays.asList("speed", "speed-profile", "everything", "everything-profile", "space", "space-profile"));
+    private volatile ArrayList<App> appsAll;               // from PackageManager, built off the UI thread
+    private boolean appsLoading;
+    private long appsLoadedAt, appsAsked;
+    private int appsAsks;
+    private Map<String, String> appStates;                 // package -> compiler filter; null while the daemon's file is missing or incomplete
+    private Map<String, String> appsSt = new java.util.HashMap<>();
+    private String appsStamp = "", appsSig = "", appsQuery = "";
+    private int appsFilter, appsLimit = 60;                // filter: 0 all, 1 not compiled, 2 compiled
+    private LinearLayout appsBox;
+    private TextView appsInfo;
+
+    private static String get0(Map<String, String> m, String k) { String v = m.get(k); return v == null ? "" : v; }
+
+    private void pageApps() {
+        TextView hint = text("Tap an app to compile it for faster launches or to put it back to the system default. Apps are compiled one at a time.", 13.5f, false, dim());
+        hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
+        LinearLayout c = group(null);
+        rowAction(c, "Compile all not compiled", "Compiles every app that is not at speed yet, apps at speed profile included. Runs in the background and takes 10 to 15 minutes.", () -> compile("compile_now"));
+
+        appsInfo = text("", 13.5f, false, dim());
+        appsInfo.setPadding(px(10), px(18), px(10), px(8));
+        appsInfo.setOnClickListener(v -> { appsAsks = 0; askApps(); });
+        col.addView(appsInfo);
+
+        EditText q = new EditText(this);
+        q.setHint("Search by name or package"); q.setSingleLine(true); q.setTextSize(15);
+        q.setTextColor(ink()); q.setHintTextColor(dim());
+        q.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        q.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        GradientDrawable qg = new GradientDrawable(); qg.setColor(card()); qg.setCornerRadius(px(26));
+        q.setBackground(qg); q.setPadding(px(20), px(14), px(20), px(14));
+        q.setText(appsQuery);
+        q.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int d) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int d) { }
+            @Override public void afterTextChanged(Editable e) { appsQuery = e.toString(); appsLimit = 60; fillApps(); }
+        });
+        col.addView(q, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setPadding(0, px(12), 0, px(2));
+        String[] names = {"All", "Not compiled", "Compiled"};
+        for (int i = 0; i < names.length; i++) {
+            final int fi = i;
+            boolean on = i == appsFilter;
+            TextView t = text(names[i], 14, true, on ? onAccent() : ink());
+            t.setGravity(Gravity.CENTER); t.setPadding(px(18), px(10), px(18), px(10));
+            GradientDrawable g = new GradientDrawable(); g.setCornerRadius(px(20)); g.setColor(on ? accent() : card());
+            t.setBackground(g);
+            t.setOnClickListener(v -> { appsFilter = fi; appsLimit = 60; build(); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.setMargins(0, 0, px(8), 0);
+            chips.addView(t, lp);
+        }
+        col.addView(chips);
+
+        appsBox = group(null);
+        if (!appsLoading && System.currentTimeMillis() - appsLoadedAt > 30000) loadAppList();
+        appsSig = "";
+        refreshApps();
+    }
+
+    /** Reads the installed apps; labels take a moment, so this runs on its own thread. */
+    private void loadAppList() {
+        appsLoading = true;
+        new Thread(() -> {
+            ArrayList<App> out = new ArrayList<>();
+            try {
+                PackageManager pm = getPackageManager();
+                for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                    if (!ai.enabled) continue;
+                    App a = new App();
+                    a.pkg = ai.packageName;
+                    try { a.label = String.valueOf(ai.loadLabel(pm)); } catch (Exception e) { a.label = a.pkg; }
+                    a.system = (ai.flags & (ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0;
+                    a.code = (ai.flags & ApplicationInfo.FLAG_HAS_CODE) != 0;
+                    out.add(a);
+                }
+            } catch (Throwable ignored) { }
+            ui.post(() -> {
+                appsLoading = false;
+                if (!out.isEmpty() || appsAll == null) { appsAll = out; appsLoadedAt = System.currentTimeMillis(); }
+                if (!isDestroyed() && "apps".equals(page)) fillApps();
+            });
+        }).start();
+    }
+
+    private void askApps() { Cfg.request(this, "refresh_apps", "1"); appsAsked = System.currentTimeMillis(); appsAsks++; }
+
+    /** Runs every second while the page is open: re-reads the state copy and the list file and redraws only when something changed. */
+    private void refreshApps() {
+        if (appsInfo == null) return;
+        Map<String, String> s = Cfg.load(this);
+        appsSt = s;
+        String stamp = get0(s, "apps_state_time"), rf = get0(s, "apps_refresh");
+        if (appStates == null || (!stamp.isEmpty() && !stamp.equals(appsStamp))) {
+            Map<String, String> m = Cfg.loadApps(this);
+            if (m != null) { appStates = m; appsStamp = get0(m, "apps_state_time"); appsAsks = 0; }
+        }
+        long now = System.currentTimeMillis();
+        String info, job = get0(s, "compile_pkg_status"), queue = get0(s, "compile_queue");
+        int waiting = queue.isEmpty() ? 0 : queue.split(",").length;
+        if (appStates == null) {
+            if ("running".equals(rf)) info = "Loading compile states…";
+            else if ("failed".equals(rf)) info = "Could not read the compile states. Tap here to try again.";
+            else if (appsAsks >= 3) info = "The tuner service did not answer. Install the newest tablet_tunerd.sh on the tablet, then tap here.";
+            else { info = "Loading compile states…"; if (now - appsAsked > 8000) askApps(); }
+        } else if ("running".equals(s.get("compile_status"))) {
+            info = "A system compile is running. Wait for it to finish before compiling one app.";
+        } else if (job.endsWith(":running")) {
+            info = "Compiling " + job.substring(0, job.length() - 8) + (waiting > 0 ? ", " + waiting + " waiting" : "") + ".";
+        } else {
+            long t = 0; try { t = Long.parseLong(appsStamp) * 1000; } catch (Exception ignored) { }
+            info = "Compile states read at " + (t > 0 ? java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date(t)) : "an unknown time") + ". Tap here to read them again.";
+            if (t > 0 && now - t > 300000 && now - appsAsked > 60000) askApps();
+        }
+        appsInfo.setText(info);
+        String sig = appsStamp + "|" + job + "|" + queue + "|" + s.get("compile_status") + "|" + (appStates == null);
+        if (!sig.equals(appsSig)) { appsSig = sig; fillApps(); }
+    }
+
+    private static String stateLabel(String f) {
+        if (f == null || f.isEmpty()) return "Not compiled";
+        switch (f) {
+            case "unknown": case "error": case "run-from-apk": case "run-from-apk-fallback": case "run-from-vdex-fallback": return "Not compiled";
+            default: return f.substring(0, 1).toUpperCase(Locale.US) + f.substring(1).replace('-', ' ');
+        }
+    }
+    /** 0 not compiled, 1 compiled to native code, 2 nothing to compile. */
+    private int appGroup(App a) {
+        if (!a.code) return 2;
+        return appStates != null && NATIVE.contains(appStates.get(a.pkg)) ? 1 : 0;
+    }
+    private String baseState(App a) { return !a.code ? "No code" : appStates == null ? "Loading" : stateLabel(appStates.get(a.pkg)); }
+    private String stateText(App a) {
+        String job = get0(appsSt, "compile_pkg_status"), jp = "", js = "";
+        int i = job.lastIndexOf(':');
+        if (i > 0) { jp = job.substring(0, i); js = job.substring(i + 1); }
+        if (a.pkg.equals(jp) && "running".equals(js)) return "Compiling…";
+        if (("," + get0(appsSt, "compile_queue")).contains("," + a.pkg + ",")) return "Waiting";
+        if (a.pkg.equals(jp) && "failed".equals(js)) return "Failed";
+        if (a.pkg.equals(jp) && "done".equals(js)) return "Done, " + baseState(a).toLowerCase(Locale.US);
+        return baseState(a);
+    }
+
+    private void fillApps() {
+        if (appsBox == null) return;
+        appsBox.removeAllViews();
+        if (appsAll == null) { row(appsBox, "Loading apps…", null, null); return; }
+        if (appStates == null && appsFilter != 0) { row(appsBox, "Waiting for the compile states", "Pick All to see the apps meanwhile.", null); return; }
+        String q = appsQuery.trim().toLowerCase(Locale.ROOT);
+        final ArrayList<App> m = new ArrayList<>();
+        for (App a : appsAll) {
+            int g = appGroup(a);
+            if (appsFilter == 1 && g != 0 || appsFilter == 2 && g != 1) continue;
+            if (!q.isEmpty() && !a.label.toLowerCase(Locale.ROOT).contains(q) && !a.pkg.toLowerCase(Locale.ROOT).contains(q)) continue;
+            m.add(a);
+        }
+        Collections.sort(m, (x, y) -> { int gx = appGroup(x), gy = appGroup(y); return gx != gy ? gx - gy : x.label.compareToIgnoreCase(y.label); });
+        if (m.isEmpty()) { row(appsBox, "No apps match", null, null); return; }
+        for (int i = 0; i < Math.min(m.size(), appsLimit); i++) {
+            final App a = m.get(i);
+            String st1 = stateText(a);
+            TextView sv = text(st1, 14, true, appGroup(a) == 1 ? accent() : ink());
+            sv.setGravity(Gravity.END);
+            row(appsBox, a.label, a.pkg + (a.system ? "\nSystem app" : ""), sv).setOnClickListener(v -> appDialog(a));
+        }
+        if (m.size() > appsLimit)
+            row(appsBox, "Show more", appsLimit + " of " + m.size() + " shown", text("›", 22, false, dim())).setOnClickListener(v -> { appsLimit += 60; fillApps(); });
+    }
+
+    private int attrColor(int attr) {
+        android.content.res.TypedArray t = obtainStyledAttributes(new int[]{attr});
+        try { return t.getColor(0, ink()); } finally { t.recycle(); }
+    }
+
+    private void appDialog(final App a) {
+        final int pri = attrColor(android.R.attr.textColorPrimary), sec = attrColor(android.R.attr.textColorSecondary);
+        LinearLayout v = new LinearLayout(this);
+        v.setOrientation(LinearLayout.VERTICAL);
+        v.setPadding(px(24), px(8), px(24), 0);
+        v.addView(text(a.pkg, 13, false, sec));
+        TextView cur = text("Current state: " + stateText(a), 15, true, pri);
+        cur.setPadding(0, px(6), 0, px(10));
+        v.addView(cur);
+        final AlertDialog[] dlg = new AlertDialog[1];
+        String[][] acts = {
+            {"Compile (speed)", "Compiles all of the app's code to native code. Fastest launches, uses more storage.", "compile_pkg"},
+            {"Compile (speed profile)", "Compiles only the code this app has used before. Quicker to finish, smaller gain.", "compile_pkg_profile"},
+            {"Reset", "Removes the compiled code and goes back to the system default.", "reset_pkg"}};
+        for (final String[] x : acts) {
+            LinearLayout r = new LinearLayout(this);
+            r.setOrientation(LinearLayout.VERTICAL);
+            r.setPadding(0, px(10), 0, px(10));
+            r.addView(text(x[0], 16, true, accent()));
+            TextView d = text(x[1], 13, false, sec); d.setPadding(0, px(2), 0, 0);
+            r.addView(d);
+            r.setOnClickListener(b -> { dlg[0].dismiss(); appAction(x[2], a); });
+            v.addView(r);
+        }
+        dlg[0] = new AlertDialog.Builder(this).setTitle(a.label).setView(v).setNegativeButton("Cancel", null).show();
+    }
+
+    private void appAction(String key, App a) {
+        Map<String, String> s = Cfg.load(this);
+        if ("running".equals(s.get("compile_status"))) { Toast.makeText(this, "A system compile is running. Wait for it to finish.", Toast.LENGTH_SHORT).show(); return; }
+        Cfg.request(this, key, a.pkg);
+        setStatus("Sent");
+    }
+
     private void pageSystem() {
         LinearLayout c = group("Shortcuts");
         rowButton(c, "Status bar", "Clock, battery, network speed, brightness slider", comp("org.lineageos.lineageparts", "org.lineageos.lineageparts.statusbar.StatusBarSettings"));
@@ -629,6 +856,7 @@ public class MainActivity extends Activity {
         row(c, "Compile apps now", "Compiles installed apps for faster launches. Takes 10 to 15 minutes, runs in the background. SystemUI and the launcher restart when it finishes the first apps.", compileView)
             .setOnClickListener(v -> compile("compile_now"));
         rowAction(c, "Recompile all apps", "Redoes apps that are already compiled too. Use Restart system interface afterwards.", () -> compile("compile_all"));
+        rowGo(c, "Per app compile", "See the compile state of every app and compile or reset one app", "apps");
         c = group("Restart");
         rowAction(c, "Restart system interface", "Re-applies theme changes without rebooting", () -> { Cfg.request(this, "restart_ui", "1"); setStatus("Restarting the interface…"); });
         rowAction(c, "Reboot the tablet", "Needed for a few changes to fully apply", () ->

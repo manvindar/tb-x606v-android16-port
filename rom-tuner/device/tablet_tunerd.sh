@@ -19,9 +19,96 @@ cstat() {   # idle, running, done (the script prints DONE last) or missing; the 
 }
 compile() {   # $1 = "" skips apps that are already compiled, -f recompiles all; refuses to start a second run
   [ "$(cstat)" = running ] && { log "compile already running"; return; }
+  [ -d $QL ] && { log "app compile running"; return; }
   [ -f $DXS ] || { log "no $DXS"; return; }
   DEXOPT_FORCE=$1 nohup sh $DXS > $DXL 2>&1 < /dev/null &
   echo $! > $DXP; log "compile started ($1)"
+}
+
+# ---------- per app compile and the compile state list ----------
+# Requests go into a queue file that one worker drains, one compile at a time. The worker is started by the request handler and flagged by the
+# directory $QL. $RL is held while the state list is rebuilt. The app reads the list from files/apps_state ("package=filter" lines, the last line is
+# apps_state_time=<epoch> so a half written file can be told from a complete one).
+QF=/data/local/tmp/tuner.queue; QL=/data/local/tmp/tuner.q.lock; RL=/data/local/tmp/tuner.r.lock
+PST=/data/local/tmp/tuner.pkgstat; AFD=/data/local/tmp/tuner.apps; AFAIL=/data/local/tmp/tuner.apps.fail
+pkgok() { echo "$1" | grep -qE '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$'; }
+lock_wait() { while ! mkdir $LOCK 2>/dev/null; do sleep 0.3; done; }
+pub_locked() { lock_wait; load; publish; rmdir $LOCK; }   # for background jobs: publish writes the app's state file, so it must not overlap handle
+pubapps() {
+  echo "compile_pkg_status=$(cat $PST 2>/dev/null)"
+  echo "compile_queue=$(cut -d' ' -f2 $QF 2>/dev/null | tr '\n' ,)"
+  echo "apps_state_time=$(sed -n 's/^apps_state_time=//p' $AFD 2>/dev/null)"
+  echo "apps_refresh=$([ -d $RL ] && echo running || { [ -f $AFAIL ] && echo failed || echo idle; })"
+}
+# stdin: "art dump" text ("[com.x]" header, then "path:" blocks with "arm64: [status=speed] ..."). Prints "package=filter" with the first status of each package
+# (the base apk). The header may be indented (dumpsys package dexopt nests it under "Dexopt state:").
+dexstates() {
+  sed -n -e 's/^ *\[\([A-Za-z][A-Za-z0-9_.]*\)\] *$/P \1/p' -e 's/.*\[status=\([A-Za-z0-9_-]*\)\].*/S \1/p' | {
+    pk=; got=1
+    while read t v; do
+      case $t in
+        P) pk=$v; got=;;
+        S) [ -z "$got" ] && [ -n "$pk" ] && { echo "$pk=$v"; got=1; };;
+      esac
+    done
+  }
+}
+apps_refresh() {   # $1 empty: read every package (takes seconds); $1 package: read that one and replace its line. Run in the background only.
+  if [ -n "$1" ]; then while ! mkdir $RL 2>/dev/null; do sleep 1; done; else mkdir $RL 2>/dev/null || return; fi
+  pub_locked
+  if [ -n "$1" ]; then
+    qs=$(cmd package art dump "$1" 2>/dev/null | dexstates | head -1)
+    [ -n "$qs" ] && [ -f $AFD ] && { { grep -v -e "^$1=" -e '^apps_state_time=' $AFD; echo "$qs"; echo "apps_state_time=$(date +%s)"; } > $AFD.t && mv $AFD.t $AFD; }
+  else
+    qs=$(cmd package art dump 2>/dev/null | dexstates)
+    [ -z "$qs" ] && qs=$(dumpsys package dexopt 2>/dev/null | dexstates)
+    if [ -n "$qs" ]; then { echo "$qs"; echo "apps_state_time=$(date +%s)"; } > $AFD.t && mv $AFD.t $AFD; rm -f $AFAIL
+    else : > $AFAIL; log "could not read the compile states"; fi
+  fi
+  [ -f $AFD ] && [ -f $APP/apps_state ] && cat $AFD > $APP/apps_state
+  rmdir $RL; pub_locked
+}
+apps_refresh_bg() { ( trap - EXIT; apps_refresh "$1" ) < /dev/null > /dev/null 2>&1 & }
+fixpkg() {   # the same stale copy cleanup as fixcache in dexopt_all.sh, for one package
+  pm path "$1" | sed 's/^package://' | while read qk; do
+    case $qk in /system/*|/product/*|/system_ext/*|/vendor/*) ;; *) continue;; esac
+    qd=${qk%/*}; qb=${qk##*/}; qb=${qb%.apk}
+    [ -f "$qd/oat/arm64/$qb.odex" ] || continue
+    rm -f /data/dalvik-cache/arm64/$(echo "${qk#/}" | sed 's|/|@|g')@classes.*
+  done
+}
+pkg_job() {   # $1 speed|speed-profile|reset, $2 package
+  echo "$2:running" > $PST; pub_locked
+  qr=done; qo=
+  if ! oneof "$1" speed speed-profile reset || ! pkgok "$2" || ! pm path "$2" > /dev/null 2>&1; then qr=failed
+  elif [ "$1" = reset ]; then qo=$(cmd package compile --reset "$2" 2>&1) || qr=failed
+  else qo=$(cmd package compile -m "$1" -f "$2" 2>&1) || qr=failed
+  fi
+  echo "$qo" | grep -qE '^(Failure|Error)|Exception|Unknown' && qr=failed
+  if [ $qr = done ] && [ "$1" != reset ]; then
+    fixpkg "$2"
+    [ "$2" != org.tablet.tuner ] && am force-stop "$2"   # a running process keeps the old code; the tuner itself would close its own screen
+  fi
+  log "$1 $2 $qr: $(echo "$qo" | head -1)"
+  apps_refresh "$2"
+  echo "$2:$qr" > $PST
+}
+qworker() {   # one job at a time; the empty check and the flag reset happen under $LOCK, so a request that arrives meanwhile is never stranded
+  while :; do
+    lock_wait
+    qj=$(sed -n 1p $QF 2>/dev/null)
+    if [ -z "$qj" ]; then rmdir $QL; rmdir $LOCK; break; fi
+    sed 1d $QF > $QF.t; mv $QF.t $QF; rmdir $LOCK
+    set -- $qj; pkg_job "$1" "$2"
+  done
+  pub_locked
+}
+pkg_enqueue() {   # $1 speed|speed-profile|reset, $2 package; called from handle, which holds $LOCK
+  if [ "$(cstat)" = running ]; then log "refused $1 $2: system compile running"; echo "$2:failed" > $PST; return; fi
+  pm path "$2" > /dev/null 2>&1 || { log "no package $2"; return; }
+  grep -qx "$1 $2" $QF 2>/dev/null && return
+  echo "$1 $2" >> $QF
+  if mkdir $QL 2>/dev/null; then ( trap - EXIT; qworker ) < /dev/null > /dev/null 2>&1 & fi
 }
 
 # ---------- state ----------
@@ -69,7 +156,7 @@ putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
 publish() {   # copy state (+ a status line) to the app; the file is pre-created with the app's owner/context
   [ -f $APP/state ] || return
   gpu_eff=0; [ "$gpu_freq" != 0 ] && [ "$perf_profile" != battery ] && gpu_eff=1
-  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; echo "compile_status=$(cstat)"; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $APP/state
+  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; echo "compile_status=$(cstat)"; pubapps; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $APP/state
 }
 
 # ---------- appliers ----------
@@ -186,6 +273,8 @@ valid() {   # $1 key, $2 value
     cap_margin) oneof "$2" 1024 1280 1536 1792;;
     watermark) oneof "$2" 10 20 30;;
     cached_apps) oneof "$2" default 16 24 32 48;;
+    compile_pkg|compile_pkg_profile|reset_pkg) pkgok "$2";;
+    refresh_apps) oneof "$2" 1;;
     *) return 0;;
   esac
 }
@@ -296,7 +385,7 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -312,6 +401,10 @@ handle() {
       reboot) sync; reboot; continue;;
       compile_now) compile ""; continue;;
       compile_all) compile -f; continue;;
+      compile_pkg) pkg_enqueue speed "$v"; continue;;
+      compile_pkg_profile) pkg_enqueue speed-profile "$v"; continue;;
+      reset_pkg) pkg_enqueue reset "$v"; continue;;
+      refresh_apps) apps_refresh_bg; continue;;
       *) log "unknown $k"; continue;;
     esac
     load
@@ -330,12 +423,13 @@ handle() {
 
 # ---------- daemon ----------
 [ -n "$1" ] && { case $1 in *w*) [ "$3" = request ] && handle;; esac; exit 0; }
-rmdir $LOCK 2>/dev/null
+rmdir $LOCK $QL $RL 2>/dev/null; rm -f $QF $PST $AFAIL
 [ -f $S ] || seed
 until [ -d $(dirname $APP) ]; do sleep 2; done; mkdir -p $APP; chown $(stat -c %u $(dirname $APP)):$(stat -c %u $(dirname $APP)) $APP; chmod 771 $APP; restorecon $APP
 UID_=$(stat -c %u $APP)
-for f in state request; do [ -f $APP/$f ] || touch $APP/$f; chown $UID_:$UID_ $APP/$f; chmod 660 $APP/$f; restorecon $APP/$f; done
+for f in state request apps_state; do [ -f $APP/$f ] || touch $APP/$f; chown $UID_:$UID_ $APP/$f; chmod 660 $APP/$f; restorecon $APP/$f; done
 rm -f $APP/request                          # the app recreates it; inotifyd watches the directory
+[ -f $AFD ] && cat $AFD > $APP/apps_state   # the last compile state list, until the app asks for a new one
 w /proc/ppm/policy_status "2 0"; w /proc/ppm/policy_status "3 0"   # FORCE_LIMIT and PWR_THRO off
 w /proc/sys/kernel/printk "1 4 1 7"
 seedlive; load; profile; tune; [ "$cached_apps" != default ] && ext cached_apps; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
@@ -370,7 +464,7 @@ enforce() {
 }
 # the compile run ends on its own, so tell the app when its status changes
 CS=
-cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; [ -d $LOCK ] && return; CS=$n; load; publish; }
+cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; [ -d $LOCK ] && return; [ "$CS" = running ] && apps_refresh_bg; CS=$n; load; publish; }
 ( while sleep 5; do enforce; cstat_pub; done ) &
 publish; log "daemon ready"
 exec inotifyd /system/bin/tablet_tunerd.sh $APP:nw   # toybox mask parsing is quirky: single letters are rejected, "wn" drops w
