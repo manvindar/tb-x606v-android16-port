@@ -323,16 +323,22 @@ pq_apply() {
 # saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory, picture and overclock keys (oc_master, oc_cpu_uv, oc_gpu), not the look. A profile saved before the overclock keys existed leaves the overclock as it is when applied; one that has them switches it on or off and the crash and thermal guards still apply.
 PF=/data/local/tmp/tuner.profiles
 PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
-profile_save() {   # $1 name
-  [ -f $PF ] && grep -v "^$1|" $PF > $PF.t || : > $PF.t
+pf_line() { while IFS= read -r l_; do [ "${l_%%|*}" = "$1" ] && { echo "$l_"; return 0; }; done < $PF 2>/dev/null; return 1; }   # exact name match (no regex), prints the line
+profile_save() {   # $1 name; an existing profile of that name is replaced in place, a new one goes last
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done
-  echo "$line" >> $PF.t; mv $PF.t $PF; log "saved profile $1"
+  : > $PF.t; d=0
+  if [ -f $PF ]; then while IFS= read -r l_; do
+    [ -z "$l_" ] && continue
+    if [ "${l_%%|*}" = "$1" ]; then [ $d = 0 ] && echo "$line" >> $PF.t; d=1; else echo "$l_" >> $PF.t; fi
+  done < $PF; fi
+  [ $d = 1 ] || echo "$line" >> $PF.t
+  mv $PF.t $PF; log "saved profile $1"
 }
-profile_delete() { [ -f $PF ] && { grep -v "^$1|" $PF > $PF.t; mv $PF.t $PF; log "deleted profile $1"; }; }
-profile_apply() {  # $1 name -> state keys
-  l=$(grep "^$1|" $PF 2>/dev/null | head -1); [ -z "$l" ] && { log "no profile $1"; return 1; }
+profile_delete() { [ -f $PF ] && { while IFS= read -r l_; do [ -n "$l_" ] && [ "${l_%%|*}" != "$1" ] && echo "$l_"; done < $PF > $PF.t; mv $PF.t $PF; log "deleted profile $1"; }; }
+profile_apply() {  # $1 name -> state keys. profile_base remembers where the settings came from; it survives edits (profile_active is cleared by those)
+  l=$(pf_line "$1"); [ -z "$l" ] && { log "no profile $1"; return 1; }
   for kv in ${l#*|}; do putkey ${kv%%=*} ${kv#*=}; done
-  putkey preset custom; putkey profile_active "$1"; log "applied profile $1"
+  putkey preset custom; putkey profile_active "$1"; putkey profile_base "$1"; log "applied profile $1"
 }
 cpm() { case $1 in 0) echo 'Default(Normal) mode';; 1) echo 'Low Power mode';; 2) echo 'Just Make mode';; 3) echo 'Performance(Sports) mode';; esac; }
 # validation: only these values reach a node or a command. Keys without a rule pass (they were checked by the character set).
@@ -466,7 +472,7 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -477,10 +483,11 @@ handle() {
       oc_master|oc_cpu_uv|oc_gpu) putkey $k $v;;
       oc_profile) for kv in oc_master=1 oc=1 oc_cpu_uv=0 oc_gpu=730000 preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; P=1; U=1; load; continue;;
       oc_stock) for kv in oc_master=0 oc=0 oc_cpu_uv=0 oc_gpu=0 oc_status=off preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; rm -f $OCM; load; oc_off; P=1; U=1; continue;;
-      save_profile) profile_save $v; putkey profile_active $v; load; continue;;
-      delete_profile) profile_delete $v; [ "$profile_active" = "$v" ] && putkey profile_active ""; load; continue;;
+      save_profile) profile_save $v; putkey profile_active $v; putkey profile_base $v; load; continue;;
+      update_profile) if pf_line "$v" > /dev/null; then profile_save $v; putkey profile_active $v; putkey profile_base $v; else log "reject update_profile $v: no such profile"; fi; load; continue;;
+      delete_profile) profile_delete $v; [ "$profile_active" = "$v" ] && putkey profile_active ""; [ "$profile_base" = "$v" ] && putkey profile_base ""; load; continue;;
       apply_profile) profile_apply $v && { P=1; U=1; Q=1; }; load; continue;;
-      preset) for kv in $(presets $v); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset $v; putkey profile_active ""; P=1; U=1; load; continue;;
+      preset) for kv in $(presets $v); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset $v; putkey profile_active ""; putkey profile_base ""; P=1; U=1; load; continue;;
       restart_ui) pkill -f com.android.systemui; continue;;
       reboot) sync; reboot; continue;;
       compile_now) compile ""; continue;;

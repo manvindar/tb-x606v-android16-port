@@ -655,9 +655,11 @@ public class MainActivity extends Activity {
         TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), compact ? 28 : 34, true, ink());
         name.setGravity(Gravity.CENTER); name.setPadding(0, px(compact ? 4 : 8), 0, px(4));
         col.addView(name, new LinearLayout.LayoutParams(-1, -2));
-        TextView desc = text(idx >= 0 ? PRESETS[idx][2] : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile" + (compact ? "." : " below.") : "Your saved profile. Pick a preset on the dial to leave it.", compact ? 14 : 15, false, dim());
+        boolean upd = idx < 0 && canUpdateProfile();
+        TextView desc = text(idx >= 0 ? PRESETS[idx][2] : upd ? "Based on " + Profiles.shown(get("profile_base", "")) + ", changed. Save the changes or pick a preset." : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile" + (compact ? "." : " below.") : "Your saved profile. Pick a preset on the dial to leave it.", compact ? 14 : 15, false, dim());
         desc.setGravity(Gravity.CENTER); desc.setPadding(px(compact ? 8 : 24), 0, px(compact ? 8 : 24), px(compact ? 12 : 10));
         col.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+        if (canUpdateProfile()) updateProfileRow(group(null));
     }
 
     // ---------- home ----------
@@ -696,9 +698,25 @@ public class MainActivity extends Activity {
         profileRows(group(null));
     }
 
-    /** Saved profiles: tap to apply, Delete to remove, and a row that saves the current performance, memory and picture settings. */
+    /** The settings came from a saved profile and were edited since (an old daemon sends no profile_base: no row). */
+    private boolean canUpdateProfile() { return Profiles.canUpdate(get("profile_base", ""), get("profile_active", ""), get("profiles", "")); }
+
+    /** Overwrites the profile the settings came from, after a confirmation. */
+    private void updateProfileRow(LinearLayout c) {
+        final String n = get("profile_base", ""), shown = Profiles.shown(n);
+        row(c, "Save changes to \"" + shown + "\"", "Overwrites the saved profile with the current settings", text("Save", 15, true, accent()))
+            .setOnClickListener(v -> new AlertDialog.Builder(this).setMessage("Overwrite the profile \"" + shown + "\" with the current settings?")
+                .setNegativeButton("Cancel", null).setPositiveButton("Overwrite", (d, w) -> {
+                    set("update_profile", n); st.put("profile_active", n);
+                    Toast.makeText(this, "Saved changes to " + shown, Toast.LENGTH_SHORT).show();
+                    build();
+                }).show());
+    }
+
+    /** Saved profiles: tap to apply, Delete to remove, a row that overwrites the profile in use after edits, and a row that saves the current performance, memory and picture settings. */
     private void profileRows(LinearLayout c) {
         String active = get("profile_active", "");
+        if (canUpdateProfile()) updateProfileRow(c);
         for (final String n : get("profiles", "").split(",")) {
             if (n.isEmpty()) continue;
             final String shown = n.replace('_', ' ');

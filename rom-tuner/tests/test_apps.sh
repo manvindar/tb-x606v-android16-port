@@ -155,6 +155,8 @@ if command -v javac > /dev/null; then
   java -cp $J org.tablet.tuner.ProgTest || fail=1
   javac -d $J $D/src/org/tablet/tuner/Layouts.java $D/tests/LayoutTest.java 2> $T/javac2.log || { cat $T/javac2.log; fail=1; }
   java -cp $J org.tablet.tuner.LayoutTest || fail=1
-else echo "skip ProgTest and LayoutTest (no javac)"; fi
+  javac -d $J $D/src/org/tablet/tuner/Profiles.java $D/tests/ProfilesTest.java 2> $T/javac3.log || { cat $T/javac3.log; fail=1; }
+  java -cp $J org.tablet.tuner.ProfilesTest || fail=1
+else echo "skip ProgTest, LayoutTest and ProfilesTest (no javac)"; fi
 command rm -rf $T
 [ $fail = 0 ] && echo "all passed"; exit $fail
