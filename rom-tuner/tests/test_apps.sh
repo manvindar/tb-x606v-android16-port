@@ -153,6 +153,8 @@ if command -v javac > /dev/null; then
   J=$T/jvm; mkdir -p $J
   javac -d $J $D/src/org/tablet/tuner/Prog.java $D/tests/ProgTest.java 2> $T/javac.log || { cat $T/javac.log; fail=1; }
   java -cp $J org.tablet.tuner.ProgTest || fail=1
-else echo "skip ProgTest (no javac)"; fi
+  javac -d $J $D/src/org/tablet/tuner/Layouts.java $D/tests/LayoutTest.java 2> $T/javac2.log || { cat $T/javac2.log; fail=1; }
+  java -cp $J org.tablet.tuner.LayoutTest || fail=1
+else echo "skip ProgTest and LayoutTest (no javac)"; fi
 command rm -rf $T
 [ $fail = 0 ] && echo "all passed"; exit $fail

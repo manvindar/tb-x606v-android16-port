@@ -16,6 +16,7 @@ final class DialView extends View {
     private int accent, track, ink, dim, onAccent, warm;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private float dragPos = -1;
+    private float maxR = 250;     // dp
 
     DialView(Context c) { super(c); }
 
@@ -25,6 +26,8 @@ final class DialView extends View {
     void setItems(String[] l) { labels = l; invalidate(); }
     void setSelected(int i) { selected = i; dragPos = -1; invalidate(); }
     void setOnPick(OnPick o) { onPick = o; }
+    /** Caps the arc radius (dp) for a compact dial. */
+    void setMaxRadius(float dp) { maxR = dp; requestLayout(); }
 
     private float dp(float v) { return v * getResources().getDisplayMetrics().density; }
     private float cx() { return getWidth() / 2f; }
@@ -39,7 +42,7 @@ final class DialView extends View {
 
     @Override protected void onMeasure(int w, int h) {
         int width = MeasureSpec.getSize(w);
-        setMeasuredDimension(width, (int) (Math.min(width / 2f - dp(36), dp(250)) + dp(84)));
+        setMeasuredDimension(width, (int) (Math.min(width / 2f - dp(36), dp(maxR)) + dp(84)));
     }
 
     @Override protected void onDraw(Canvas c) {

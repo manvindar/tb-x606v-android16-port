@@ -32,7 +32,15 @@ public class MainActivity extends Activity {
     private LinearLayout col;
     private boolean night;
     private float dp;
-    private String page = HOME;
+    private String page = HOME;                         // narrow layout: the page on screen
+    private String section = "perf";                    // two pane layout: the section in the right pane
+    private boolean wide;                               // layout mode of the tree built last
+    private int cols = 1, appsCols = 1;                 // columns for setting cards and for app rows
+    private ScrollView mainSv, leftSv, rightSv;
+    private LinearLayout rightCol;
+    private final java.util.HashMap<String, View> entryRows = new java.util.HashMap<>();
+    private String builtKey = "";
+    private int swapTok;
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
     private final android.os.Handler ui = new android.os.Handler();
@@ -54,16 +62,36 @@ public class MainActivity extends Activity {
         setTitle("ROM Tuner");
         if (getActionBar() != null) getActionBar().hide();
         String p = getIntent().getStringExtra("page");
-        if (p != null) page = p;
+        if (p != null) { page = p; section = p; }
+        if (b != null) {
+            page = b.getString("page", page); section = b.getString("section", section);
+            appsQuery = b.getString("query", ""); appsFilter = b.getInt("filter", 0);
+        }
+    }
+
+    @Override protected void onSaveInstanceState(Bundle b) {
+        super.onSaveInstanceState(b);
+        b.putString("page", page); b.putString("section", section); b.putString("query", appsQuery); b.putInt("filter", appsFilter);
+    }
+
+    /** Rotation, window resize and a display size change land here (see configChanges in the manifest): rebuild the tree, keep the state. */
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        dp = getResources().getDisplayMetrics().density;
+        if (!wide && Layouts.wide(c.screenWidthDp, c.screenHeightDp) && !HOME.equals(page)) section = page;
+        if (st != null) build();
     }
 
     @Override protected void onResume() { super.onResume(); st = Cfg.load(this); build(); ui.post(tick); }
 
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(tick); }
 
-    @Override public void onBackPressed() { if (!HOME.equals(page)) go(parentPage()); else super.onBackPressed(); }
+    @Override public void onBackPressed() { if (!wide && !HOME.equals(page)) go(parentPage()); else super.onBackPressed(); }
 
     private String parentPage() { return "apps".equals(page) ? "system" : HOME; }
+
+    /** The page or section the user is looking at. */
+    private String cur() { return wide ? section : page; }
 
     // ---------- state ----------
     private String get(String k, String def) { String v = st.get(k); return v == null || v.isEmpty() ? def : v; }
@@ -72,13 +100,16 @@ public class MainActivity extends Activity {
         st.put(k, v);
         Cfg.request(this, k, v);
         setStatus("Applying…");
-        col.removeCallbacks(reload);
-        col.postDelayed(reload, 2500);
+        ui.removeCallbacks(reload);
+        ui.postDelayed(reload, 2500);
     }
 
     private void setStatus(String s) { if (status != null) status.setText(s); }
 
-    private void go(String p) { page = p; build(); ((ScrollView) col.getParent().getParent()).scrollTo(0, 0); }
+    private void go(String p) {
+        if (wide) { if (!HOME.equals(p)) selectSection(p); return; }
+        page = p; build(); if (mainSv != null) mainSv.scrollTo(0, 0);
+    }
 
     // ---------- look ----------
     private int px(float v) { return Math.round(v * dp); }
@@ -100,22 +131,59 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    private LinearLayout group(String title) {
-        if (title != null) {
-            TextView t = text(title, 14, true, accent());
-            t.setPadding(px(10), px(22), 0, px(8));
-            col.addView(t);
-        } else {
-            View gap = new View(this); col.addView(gap, new LinearLayout.LayoutParams(-1, px(14)));
-        }
+    /** A rounded card that rows go into. */
+    private LinearLayout newCard() {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable g = new GradientDrawable();
         g.setColor(card()); g.setCornerRadius(px(26));
         c.setBackground(g);
         c.setPadding(0, px(4), 0, px(4));
-        col.addView(c, new LinearLayout.LayoutParams(-1, -2));
         return c;
+    }
+
+    private LinearLayout group(String title) {
+        LinearLayout host = cols > 1 ? shorterColumn() : col;
+        if (title != null) {
+            TextView t = text(title, 14, true, accent());
+            t.setPadding(px(10), px(22), 0, px(8));
+            host.addView(t);
+        } else {
+            View gap = new View(this); host.addView(gap, new LinearLayout.LayoutParams(-1, px(14)));
+        }
+        LinearLayout c = newCard();
+        host.addView(c, new LinearLayout.LayoutParams(-1, -2));
+        return c;
+    }
+
+    private static final Object PAIR = new Object();
+    /**
+     * Two columns of cards for a wide right pane. A pair of columns lasts until something else is added to col (a hint, a warning),
+     * which spans both; the next group then starts a new pair. Each card goes to the column with fewer rows so far.
+     * ponytail: the row count ignores wrapped text, so heights can differ by a few rows.
+     */
+    private LinearLayout shorterColumn() {
+        View last = col.getChildCount() > 0 ? col.getChildAt(col.getChildCount() - 1) : null;
+        LinearLayout pair;
+        if (last != null && last.getTag() == PAIR) pair = (LinearLayout) last;
+        else {
+            pair = new LinearLayout(this);
+            pair.setTag(PAIR); pair.setBaselineAligned(false);
+            for (int i = 0; i < 2; i++) {
+                LinearLayout k = new LinearLayout(this); k.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+                lp.setMargins(i == 0 ? 0 : px(8), 0, i == 0 ? px(8) : 0, 0);
+                pair.addView(k, lp);
+            }
+            col.addView(pair, new LinearLayout.LayoutParams(-1, -2));
+        }
+        LinearLayout a = (LinearLayout) pair.getChildAt(0), b = (LinearLayout) pair.getChildAt(1);
+        return rowsIn(a) <= rowsIn(b) ? a : b;
+    }
+    private static int rowsIn(LinearLayout column) {
+        int n = 0;
+        for (int i = 0; i < column.getChildCount(); i++) { View v = column.getChildAt(i); n += v instanceof LinearLayout ? ((LinearLayout) v).getChildCount() : 1; }
+        return n;
     }
 
     private void divider(LinearLayout c) {
@@ -222,10 +290,37 @@ public class MainActivity extends Activity {
     }
 
     // ---------- frame ----------
-    private void build() {
-        liveCpu = liveGpu = liveMem = liveHeat = compileView = ocView = null;
+    private void resetRefs() {
+        liveCpu = liveGpu = liveMem = liveHeat = null;
+        resetPageRefs();
+    }
+    /** Views owned by a page; the live card (left pane in wide mode) is not one of them. */
+    private void resetPageRefs() {
+        compileView = ocView = null;
         appsBox = null; appsInfo = null; progBox = null;
+    }
+
+    private String viewKey() { return (wide ? "w:" : "n:") + cur(); }
+
+    /** Rebuilds the whole tree. The scroll positions survive when the same page is rebuilt (a setting changed, the device turned). */
+    private void build() {
+        int[] y = builtKey.equals(viewKey()) || builtKey.isEmpty() ? new int[]{sy(mainSv), sy(leftSv), sy(rightSv)} : new int[3];
+        resetRefs();
+        mainSv = leftSv = rightSv = null; rightCol = null; entryRows.clear();
+        Configuration cf = getResources().getConfiguration();
+        wide = Layouts.wide(cf.screenWidthDp, cf.screenHeightDp);
+        if (wide) buildWide(cf.screenWidthDp, cf.screenHeightDp); else buildNarrow();
+        builtKey = viewKey();
+        restoreScroll(mainSv, y[0]); restoreScroll(leftSv, y[1]); restoreScroll(rightSv, y[2]);
+    }
+    private static int sy(ScrollView v) { return v == null ? 0 : v.getScrollY(); }
+    private static void restoreScroll(final ScrollView v, final int y) { if (v != null && y > 0) v.post(() -> v.scrollTo(0, y)); }
+
+    /** One centred column, as on a phone. */
+    private void buildNarrow() {
+        cols = 1; appsCols = 1;
         ScrollView sv = new ScrollView(this);
+        mainSv = sv;
         sv.setBackgroundColor(surface());
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
@@ -246,15 +341,21 @@ public class MainActivity extends Activity {
             back.setOnClickListener(v -> go(parentPage()));
             head.addView(back);
         }
-        head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(), HOME.equals(page) ? 30 : 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(page), HOME.equals(page) ? 30 : 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
         status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
         status.setMaxWidth(px(260)); status.setGravity(Gravity.END);
         head.addView(status);
         col.addView(head);
 
-        switch (page) {
+        if (HOME.equals(page)) pageHome(); else buildPage(page);
+        setContentView(sv);
+    }
+
+    private void buildPage(String p) {
+        switch (p) {
             case "perf": pagePerf(); break;
             case "oc": pageOc(); break;
+            case "profiles": pageProfiles(); break;
             case "memory": pageMemory(); break;
             case "picture": pagePicture(); break;
             case "look": pageLook(); break;
@@ -264,13 +365,13 @@ public class MainActivity extends Activity {
             case "apps": pageApps(); break;
             default: pageHome();
         }
-        setContentView(sv);
     }
 
-    private String pageTitle() {
-        switch (page) {
+    private String pageTitle(String p) {
+        switch (p) {
             case "perf": return "Performance details";
             case "oc": return "Overclock";
+            case "profiles": return "Profiles";
             case "memory": return "Memory and storage";
             case "picture": return "Picture";
             case "look": return "Look";
@@ -279,6 +380,119 @@ public class MainActivity extends Activity {
             case "apps": return "App speed";
             default: return "System";
         }
+    }
+
+    // ---------- two panes: the preset dial, live card and section list on the left, the chosen section on the right ----------
+    private void buildWide(int wDp, int hDp) {
+        if (!entryIds().contains(section)) section = "perf";
+        int contentDp = Layouts.contentWidth(wDp);
+        int settingCols = Layouts.settingColumns(contentDp);
+        appsCols = Layouts.appColumns(contentDp);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setBackgroundColor(surface());
+
+        // left: header (title, dial, live card) and the section list
+        LinearLayout header = new LinearLayout(this); header.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(px(16), px(16), px(16), px(4));
+        list.setPadding(px(16), 0, px(16), px(32));
+        col = header; cols = 1;
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(px(6), 0, px(6), px(4));
+        head.addView(text("ROM Tuner", 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
+        status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
+        status.setMaxWidth(px(150)); status.setGravity(Gravity.END);
+        head.addView(status);
+        header.addView(head);
+        presetDial(true);
+        liveCard(true);
+        col = list;
+        sectionEntries();
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        if (Layouts.pinHeader(hDp)) {
+            left.addView(header, new LinearLayout.LayoutParams(-1, -2));
+            leftSv = new ScrollView(this); leftSv.addView(list);
+            left.addView(leftSv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        } else {
+            LinearLayout both = new LinearLayout(this); both.setOrientation(LinearLayout.VERTICAL);
+            both.addView(header); both.addView(list);
+            leftSv = new ScrollView(this); leftSv.addView(both);
+            left.addView(leftSv, new LinearLayout.LayoutParams(-1, -1));
+        }
+        root.addView(left, new LinearLayout.LayoutParams(px(Layouts.leftWidth(wDp)), -1));
+        View rule = new View(this); rule.setBackgroundColor(line());
+        root.addView(rule, new LinearLayout.LayoutParams(1, -1));
+
+        // right: the selected section
+        cols = settingCols;
+        rightSv = new ScrollView(this);
+        rightCol = new LinearLayout(this);
+        rightCol.setOrientation(LinearLayout.VERTICAL);
+        rightCol.setPadding(px(Layouts.PANE_PAD), px(20), px(Layouts.PANE_PAD), px(48));
+        rightSv.addView(rightCol, new FrameLayout.LayoutParams(-1, -2));
+        root.addView(rightSv, new LinearLayout.LayoutParams(0, -1, 1f));
+        fillRight();
+        setContentView(root);
+    }
+
+    /** id, title, summary of the section list, in order. */
+    private String[][] entries() {
+        return new String[][]{
+            {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
+            {"picture", "Picture", pictureSummary()}, {"look", "Look", lookSummary()}, {"display", "Display and touch", displaySummary()},
+            {"memory", "Memory and storage", memorySummary()}, {"connect", "Connections", connectSummary()},
+            {"system", "System", get("status", "Shortcuts, logging, restart")},
+            {"apps", "App speed", "Compile state of every app, compile or reset one"}};
+    }
+    private java.util.List<String> entryIds() { ArrayList<String> r = new ArrayList<>(); for (String[] e : entries()) r.add(e[0]); return r; }
+
+    private void sectionEntries() {
+        LinearLayout c = null;
+        for (final String[] e : entries()) {
+            if (c == null || e[0].equals("picture") || e[0].equals("apps")) c = group(null);
+            final String id = e[0];
+            View r = row(c, e[1], e[2], null);
+            TextView sub = (TextView) ((LinearLayout) ((LinearLayout) r).getChildAt(0)).getChildAt(1);   // one line each keeps the list short
+            sub.setSingleLine(true); sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            r.setOnClickListener(v -> selectSection(id));
+            entryRows.put(id, r);
+            markEntry(r, id.equals(section));
+        }
+    }
+    private void markEntry(View r, boolean on) {
+        r.setSelected(on);
+        if (on) { GradientDrawable g = new GradientDrawable(); g.setColor((accent() & 0xFFFFFF) | 0x33000000); g.setCornerRadius(px(20)); r.setBackground(g); }
+        else r.setBackground(null);
+    }
+
+    /** Swaps the right pane with a short crossfade (none when animations are off). The selection is remembered in section. */
+    private void selectSection(String id) {
+        if (rightSv == null || id.equals(section)) return;
+        section = id; builtKey = viewKey();
+        for (java.util.Map.Entry<String, View> e : entryRows.entrySet()) markEntry(e.getValue(), e.getKey().equals(id));
+        final int tok = ++swapTok;
+        final ScrollView sv = rightSv;
+        sv.animate().cancel();
+        if (!android.animation.ValueAnimator.areAnimatorsEnabled()) { sv.setAlpha(1f); fillRight(); sv.scrollTo(0, 0); return; }
+        sv.animate().alpha(0f).setDuration(75).withEndAction(() -> {
+            if (tok != swapTok || sv != rightSv) return;
+            fillRight(); sv.scrollTo(0, 0);
+            sv.animate().alpha(1f).setDuration(75).start();
+        }).start();
+    }
+
+    private void fillRight() {
+        resetPageRefs();
+        rightCol.removeAllViews();
+        col = rightCol;
+        TextView t = text(pageTitle(section), 26, true, ink());
+        t.setPadding(px(6), px(4), px(6), px(4));
+        rightCol.addView(t);
+        buildPage(section);
     }
 
     // ---------- live readout (read straight from sysfs; the tuner's ROM runs permissive, elsewhere the cells show a dash) ----------
@@ -350,7 +564,8 @@ public class MainActivity extends Activity {
         progBox.addView(progText);
         progBox.setVisibility(View.GONE);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(10), 0, px(4));
-        col.addView(progBox, col.indexOfChild(card), lp);
+        LinearLayout host = (LinearLayout) card.getParent();   // col, or one of the two columns of a wide pane
+        host.addView(progBox, host.indexOfChild(card), lp);
     }
 
     private String appName(String pkg) {
@@ -401,22 +616,30 @@ public class MainActivity extends Activity {
         return v;
     }
 
-    private void liveCard() {
+    /** Four readouts in one row, or two rows of two in the narrow left pane of the wide layout. */
+    private void liveCard(boolean grid) {
         LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.HORIZONTAL);
+        c.setOrientation(grid ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         GradientDrawable g = new GradientDrawable();
         g.setColor(card()); g.setCornerRadius(px(26));
         c.setBackground(g);
-        liveCpu = liveCell(c, "CPU, GHz (fast · slow cores)", 1.25f);
-        liveGpu = liveCell(c, "GPU", 0.8f);
-        liveMem = liveCell(c, "Memory clock and free RAM", 1.3f);
-        liveHeat = liveCell(c, "Chip temperature", 0.8f);
+        LinearLayout top = c, bottom = c;
+        if (grid) {
+            top = new LinearLayout(this); bottom = new LinearLayout(this);
+            c.setPadding(0, px(4), 0, px(4));
+            c.addView(top); c.addView(bottom);
+        }
+        liveCpu = liveCell(top, "CPU, GHz (fast · slow cores)", grid ? 1f : 1.25f);
+        liveGpu = liveCell(top, "GPU", grid ? 1f : 0.8f);
+        liveMem = liveCell(bottom, "Memory clock and free RAM", grid ? 1f : 1.3f);
+        liveHeat = liveCell(bottom, "Chip temperature", grid ? 1f : 0.8f);
         col.addView(c, new LinearLayout.LayoutParams(-1, -2));
         refreshLive();
     }
 
     // ---------- home ----------
-    private void pageHome() {
+    /** The preset dial with the name and one line about the preset; compact in the left pane of the wide layout. */
+    private void presetDial(boolean compact) {
         String cur = get("preset", "balanced");
         int idx = -1;
         String[] names = new String[PRESETS.length];
@@ -424,18 +647,23 @@ public class MainActivity extends Activity {
         DialView d = new DialView(this);
         d.setColors(accent(), line(), ink(), dim(), onAccent(), 0xFFFF8A4C);
         d.setItems(names);
+        if (compact) d.setMaxRadius(130);
         d.setSelected(idx);
         d.setOnPick(i -> { set("preset", PRESETS[i][0]); build(); });
         col.addView(d, new LinearLayout.LayoutParams(-1, -2));
         String ap = get("profile_active", "");
-        TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), 34, true, ink());
-        name.setGravity(Gravity.CENTER); name.setPadding(0, px(8), 0, px(4));
+        TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), compact ? 28 : 34, true, ink());
+        name.setGravity(Gravity.CENTER); name.setPadding(0, px(compact ? 4 : 8), 0, px(4));
         col.addView(name, new LinearLayout.LayoutParams(-1, -2));
-        TextView desc = text(idx >= 0 ? PRESETS[idx][2] : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile below." : "Your saved profile. Pick a preset on the dial to leave it.", 15, false, dim());
-        desc.setGravity(Gravity.CENTER); desc.setPadding(px(24), 0, px(24), px(10));
+        TextView desc = text(idx >= 0 ? PRESETS[idx][2] : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile" + (compact ? "." : " below.") : "Your saved profile. Pick a preset on the dial to leave it.", compact ? 14 : 15, false, dim());
+        desc.setGravity(Gravity.CENTER); desc.setPadding(px(compact ? 8 : 24), 0, px(compact ? 8 : 24), px(compact ? 12 : 10));
         col.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+    }
 
-        liveCard();
+    // ---------- home ----------
+    private void pageHome() {
+        presetDial(false);
+        liveCard(false);
         LinearLayout c = group(null);
         rowGo(c, "Performance details", perfSummary(), "perf");
         rowGo(c, "Overclock", ocSummary(), "oc");
@@ -444,9 +672,28 @@ public class MainActivity extends Activity {
         rowGo(c, "Picture", pictureSummary(), "picture");
         rowGo(c, "Look", lookSummary(), "look");
         rowGo(c, "Display and touch", displaySummary(), "display");
-        rowGo(c, "Memory and storage", "Read-ahead " + pick(get("readahead", "512"), new String[]{"128", "256", "512", "1024", "2048"}, new String[]{"128 KB", "256 KB", "512 KB", "1 MB", "2 MB"}, get("readahead", "512") + " KB") + ", swappiness " + get("swappiness", "100"), "memory");
-        rowGo(c, "Connections", "Private DNS " + pick(get("dns", "auto"), new String[]{"off", "auto", "google", "cloudflare", "adguard", "quad9"}, new String[]{"off", "automatic", "Google", "Cloudflare", "AdGuard", "Quad9"}, "automatic"), "connect");
+        rowGo(c, "Memory and storage", memorySummary(), "memory");
+        rowGo(c, "Connections", connectSummary(), "connect");
         rowGo(c, "System", get("status", "Shortcuts, logging, restart"), "system");
+    }
+
+    private String memorySummary() {
+        return "Read-ahead " + pick(get("readahead", "512"), new String[]{"128", "256", "512", "1024", "2048"}, new String[]{"128 KB", "256 KB", "512 KB", "1 MB", "2 MB"}, get("readahead", "512") + " KB") + ", swappiness " + get("swappiness", "100");
+    }
+    private String connectSummary() {
+        return "Private DNS " + pick(get("dns", "auto"), new String[]{"off", "auto", "google", "cloudflare", "adguard", "quad9"}, new String[]{"off", "automatic", "Google", "Cloudflare", "AdGuard", "Quad9"}, "automatic");
+    }
+    private String profileSummary() {
+        int n = 0; for (String p : get("profiles", "").split(",")) if (!p.isEmpty()) n++;
+        String a = get("profile_active", "");
+        return (n == 0 ? "None saved" : n + " saved") + (a.isEmpty() ? "" : ", in use: " + a.replace('_', ' '));
+    }
+
+    /** Wide layout only: the saved profiles get a section of their own (the narrow home lists them under Overclock). */
+    private void pageProfiles() {
+        TextView hint = text("Save the current performance, memory and picture settings under a name, then apply them again with one tap.", 13.5f, false, dim());
+        hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
+        profileRows(group(null));
     }
 
     /** Saved profiles: tap to apply, Delete to remove, and a row that saves the current performance, memory and picture settings. */
@@ -495,8 +742,8 @@ public class MainActivity extends Activity {
 
     // ---------- pages ----------
     private void pagePerf() {
-        liveCard();
-        TextView hint = text("Changing a setting here turns the preset into Custom. The dial on the home screen sets all of these together.", 13.5f, false, dim());
+        if (!wide) liveCard(false);
+        TextView hint = text("Changing a setting here turns the preset into Custom. The dial on the " + (wide ? "left" : "home screen") + " sets all of these together.", 13.5f, false, dim());
         hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
         LinearLayout c = group("Clock speed");
         rowChoice(c, "GPU clock", "Locks the PowerVR GPU to one speed. Ignored in Battery.", "gpu_freq", gpuLabels(), gpuValues(), "680000");
@@ -574,7 +821,7 @@ public class MainActivity extends Activity {
     private void pageOc() {
         TextView warn = text("Warning: overclocking can crash or freeze the tablet, uses more battery, wears the chip faster, and a hard freeze can corrupt data. Nothing is applied until 30 seconds after boot. Above 85 °C, or after a restart while overclocked, everything goes back to stock.", 13.5f, false, 0xFFFF8A4C);
         warn.setPadding(px(10), px(6), px(10), px(2)); col.addView(warn);
-        liveCard();
+        if (!wide) liveCard(false);
         LinearLayout c = group("Status");
         ocView = text(ocLine(st), 14, false, ink());
         ocView.setPadding(px(20), px(12), px(20), px(12)); c.addView(ocView);
@@ -627,7 +874,7 @@ public class MainActivity extends Activity {
         for (final String[] l : looks) {
             row(c, l[0], l[1], text("Apply", 15, true, accent())).setOnClickListener(v -> {
                 for (String kv : l[2].split(" ")) { String[] p = kv.split("="); st.put(p[0], p[1]); Cfg.request(this, p[0], p[1]); }
-                setStatus("Applying…"); col.removeCallbacks(reload); col.postDelayed(reload, 3000);
+                setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 3000);
             });
         }
         final String[] oao = {"Off", "On", "Automatic"}, oaov = {"0", "1", "2"};
@@ -769,18 +1016,7 @@ public class MainActivity extends Activity {
 
     private static String get0(Map<String, String> m, String k) { String v = m.get(k); return v == null ? "" : v; }
 
-    private void pageApps() {
-        TextView hint = text("Tap an app to compile it for faster launches or to put it back to the system default. Apps are compiled one at a time.", 13.5f, false, dim());
-        hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
-        LinearLayout c = group(null);
-        progressBlock(c);
-        rowAction(c, "Compile all not compiled", "Compiles every app that is not at speed yet, apps at speed profile included. Runs in the background and takes 10 to 15 minutes.", () -> compile("compile_now"));
-
-        appsInfo = text("", 13.5f, false, dim());
-        appsInfo.setPadding(px(10), px(18), px(10), px(8));
-        appsInfo.setOnClickListener(v -> { appsAsks = 0; askApps(); });
-        col.addView(appsInfo);
-
+    private EditText searchBox() {
         EditText q = new EditText(this);
         q.setHint("Search by name or package"); q.setSingleLine(true); q.setTextSize(15);
         q.setTextColor(ink()); q.setHintTextColor(dim());
@@ -794,28 +1030,65 @@ public class MainActivity extends Activity {
             @Override public void onTextChanged(CharSequence s, int a, int b, int d) { }
             @Override public void afterTextChanged(Editable e) { appsQuery = e.toString(); appsLimit = 60; fillApps(); }
         });
-        col.addView(q, new LinearLayout.LayoutParams(-1, -2));
+        return q;
+    }
 
+    private LinearLayout filterChips(boolean tall) {
         LinearLayout chips = new LinearLayout(this);
-        chips.setPadding(0, px(12), 0, px(2));
+        chips.setGravity(Gravity.CENTER_VERTICAL);
+        if (!tall) chips.setPadding(0, px(12), 0, px(2));
         String[] names = {"All", "Not compiled", "Compiled"};
         for (int i = 0; i < names.length; i++) {
             final int fi = i;
             boolean on = i == appsFilter;
             TextView t = text(names[i], 14, true, on ? onAccent() : ink());
             t.setGravity(Gravity.CENTER); t.setPadding(px(18), px(10), px(18), px(10));
+            if (tall) t.setMinHeight(px(48));
             GradientDrawable g = new GradientDrawable(); g.setCornerRadius(px(20)); g.setColor(on ? accent() : card());
             t.setBackground(g);
             t.setOnClickListener(v -> { appsFilter = fi; appsLimit = 60; build(); });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.setMargins(0, 0, px(8), 0);
             chips.addView(t, lp);
         }
-        col.addView(chips);
+        return chips;
+    }
 
-        appsBox = group(null);
+    private void pageApps() {
+        int savedCols = cols; cols = 1;   // the progress block, search and filter span the pane; only the app rows use columns
+        TextView hint = text("Tap an app to compile it for faster launches or to put it back to the system default. Apps are compiled one at a time.", 13.5f, false, dim());
+        hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
+        LinearLayout c = group(null);
+        progressBlock(c);
+        rowAction(c, "Compile all not compiled", "Compiles every app that is not at speed yet, apps at speed profile included. Runs in the background and takes 10 to 15 minutes.", () -> compile("compile_now"));
+
+        appsInfo = text("", 13.5f, false, dim());
+        appsInfo.setPadding(px(10), px(18), px(10), px(8));
+        appsInfo.setOnClickListener(v -> { appsAsks = 0; askApps(); });
+        col.addView(appsInfo);
+
+        EditText q = searchBox();
+        if (wide) {   // search and filter share one row on top of the list
+            LinearLayout bar = new LinearLayout(this);
+            bar.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams qp = new LinearLayout.LayoutParams(0, -2, 1f); qp.setMargins(0, 0, px(16), 0);
+            bar.addView(q, qp);
+            bar.addView(filterChips(true));
+            col.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        } else {
+            col.addView(q, new LinearLayout.LayoutParams(-1, -2));
+            col.addView(filterChips(false));
+        }
+
+        if (appsCols > 1) {
+            appsBox = new LinearLayout(this);
+            appsBox.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(14), 0, 0);
+            col.addView(appsBox, lp);
+        } else appsBox = group(null);
         if (!appsLoading && System.currentTimeMillis() - appsLoadedAt > 30000) loadAppList();
         appsSig = "";
         refreshApps();
+        cols = savedCols;
     }
 
     /** Reads the installed apps; labels take a moment, so this runs on its own thread. */
@@ -838,7 +1111,7 @@ public class MainActivity extends Activity {
             ui.post(() -> {
                 appsLoading = false;
                 if (!out.isEmpty() || appsAll == null) { appsAll = out; appsLoadedAt = System.currentTimeMillis(); }
-                if (!isDestroyed() && "apps".equals(page)) fillApps();
+                if (!isDestroyed() && "apps".equals(cur())) fillApps();
             });
         }).start();
     }
@@ -910,11 +1183,20 @@ public class MainActivity extends Activity {
         return baseState(a);
     }
 
+    /** A card for a message or the Show more row: appsBox itself in one column, else a full width card below the grid. */
+    private LinearLayout appsWholeCard() {
+        if (appsCols <= 1) return appsBox;
+        LinearLayout c = newCard();
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(appsBox.getChildCount() > 0 ? 14 : 0), 0, 0);
+        appsBox.addView(c, lp);
+        return c;
+    }
+
     private void fillApps() {
         if (appsBox == null) return;
         appsBox.removeAllViews();
-        if (appsAll == null) { row(appsBox, "Loading apps…", null, null); return; }
-        if (appStates == null && appsFilter != 0) { row(appsBox, "Waiting for the compile states", "Pick All to see the apps meanwhile.", null); return; }
+        if (appsAll == null) { row(appsWholeCard(), "Loading apps…", null, null); return; }
+        if (appStates == null && appsFilter != 0) { row(appsWholeCard(), "Waiting for the compile states", "Pick All to see the apps meanwhile.", null); return; }
         String q = appsQuery.trim().toLowerCase(Locale.ROOT);
         final ArrayList<App> m = new ArrayList<>();
         for (App a : appsAll) {
@@ -924,16 +1206,31 @@ public class MainActivity extends Activity {
             m.add(a);
         }
         Collections.sort(m, (x, y) -> { int gx = appGroup(x), gy = appGroup(y); return gx != gy ? gx - gy : x.label.compareToIgnoreCase(y.label); });
-        if (m.isEmpty()) { row(appsBox, "No apps match", null, null); return; }
-        for (int i = 0; i < Math.min(m.size(), appsLimit); i++) {
+        if (m.isEmpty()) { row(appsWholeCard(), "No apps match", null, null); return; }
+        int shown = Math.min(m.size(), appsLimit);
+        // in columns the apps run left to right, then down, so a longer list only grows at the bottom
+        LinearLayout[] cards = new LinearLayout[Math.max(1, Math.min(appsCols, shown))];
+        if (appsCols <= 1) cards[0] = appsBox;
+        else {
+            LinearLayout grid = new LinearLayout(this);
+            grid.setBaselineAligned(false);
+            for (int i = 0; i < appsCols; i++) {
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+                lp.setMargins(i == 0 ? 0 : px(8), 0, i == appsCols - 1 ? 0 : px(8), 0);
+                if (i < cards.length) { cards[i] = newCard(); grid.addView(cards[i], lp); }
+                else grid.addView(new View(this), lp);
+            }
+            appsBox.addView(grid, new LinearLayout.LayoutParams(-1, -2));
+        }
+        for (int i = 0; i < shown; i++) {
             final App a = m.get(i);
             String st1 = stateText(a);
             TextView sv = text(st1, 14, true, appGroup(a) == 1 || st1.startsWith("Compiling") || st1.equals("Queued") ? accent() : ink());
             sv.setGravity(Gravity.END);
-            row(appsBox, a.label, a.pkg + (a.system ? "\nSystem app" : ""), sv).setOnClickListener(v -> appDialog(a));
+            row(cards[i % cards.length], a.label, a.pkg + (a.system ? "\nSystem app" : ""), sv).setOnClickListener(v -> appDialog(a));
         }
         if (m.size() > appsLimit)
-            row(appsBox, "Show more", appsLimit + " of " + m.size() + " shown", text("›", 22, false, dim())).setOnClickListener(v -> { appsLimit += 60; fillApps(); });
+            row(appsWholeCard(), "Show more", appsLimit + " of " + m.size() + " shown", text("›", 22, false, dim())).setOnClickListener(v -> { appsLimit += 60; fillApps(); });
     }
 
     private int attrColor(int attr) {

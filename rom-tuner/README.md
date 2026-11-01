@@ -214,6 +214,15 @@ Not verifiable without writing to the tablet (so untested): that this kernel's `
 
 Not possible here: no source for this exact build and no rebuild. With the source of the 4.9.190 build and a rebuilt `boot.img` (never the recovery partition): for the CPU, make `_mt_cpufreq_get_cpu_level` return the 65T level, or add a row to `c65Tbl` in `mtk_cpufreq_opp_pv_table.h` and the matching `opp_tbl_method` in `mtk_cpufreq_opp_table.h` (frequency, Vproc, post divider, clock divider), which gives 2.50 GHz at 1.11875 V on the fast cluster, if this die passes it (the efuse says it was not binned for it); raise `VMAX_VAL` in `eem_config.h` for any voltage above 1.125 V. For the GPU, change `SEG3_GPU_DVFS_FREQ0` in `mt6765/mtk_gpufreq_core.h` to make a higher clock a normal OPP with the driver's own thermal limits, and for a voltage above 0.80 V the Vcore table in `drivers/devfreq/helio-dvfsrc-opp-mt6765.c`. The vbmeta and boot image signing of this tablet would also have to be dealt with.
 
+## Layout
+
+The app picks its layout from the window size, and rebuilds the view tree when the size changes (the manifest handles `orientation|screenSize|screenLayout|smallestScreenSize|density` itself, so a rotation does not restart the activity). The rules are plain functions in `src/org/tablet/tuner/Layouts.java`, tested by `tests/LayoutTest.java` (run by `sh tests/test_apps.sh`).
+
+- Narrow (width under 840 dp, or portrait): one centred column, the home page with a dial and a list, each area a full page with a back arrow. This is what a portrait tablet shows, including the 1000 dp wide portrait of the TB-X606V (`WIDE_IN_PORTRAIT` in `Layouts.java` turns two panes on there too).
+- Wide (width 840 dp or more and wider than tall, so the tablet in landscape, 1600 x 1000 dp): two panes. The left pane is 360 to 420 dp wide and holds the title, a compact preset dial, the live readout as a 2 x 2 card and the list of areas (Performance details, Overclock, Profiles, Picture, Look, Display and touch, Memory and storage, Connections, System, App speed). Tapping an area swaps the right pane with a 150 ms crossfade (none when animations are off) and the choice is remembered. On a screen 720 dp high or more the dial and readout stay put and only the list scrolls; on a shorter one the whole left pane scrolls.
+- The right pane shows the area's page. From about 720 dp of content width (landscape on this tablet) the cards of settings sit in two columns, each card going to the shorter column. Hints and warnings span both. The App speed page puts the progress block, compile button, search and filter on top and lists the apps in two columns (from 640 dp) or three (from 1000 dp), still 60 at a time with Show more.
+- A rebuild keeps the selected area, the scroll position of the same page, the search text, the filter and the one second status tick. An open dialog may close.
+
 ## Build
 
 Requirements: the Android SDK (build-tools 35, platform 34) and a JDK.
