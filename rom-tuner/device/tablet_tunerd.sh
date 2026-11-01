@@ -150,6 +150,7 @@ load() {
   [ -z "$gpu_freq" ] && gpu_freq=$([ "$gpu_lock" = 0 ] && echo 0 || echo 680000)
   : ${fg_boost:=auto} ${ta_boost:=0} ${big_rotation:=0} ${vfs_cache:=50} ${dirty:=1} ${extra_free:=49152} ${page_cluster:=0}
   : ${touch_duration_ms:=400} ${touch_opp:=0} ${touch_boost:=100} ${schedstats:=0} ${down_throttle:=20} ${up_throttle:=0} ${cap_margin:=1536} ${mcdi:=1} ${watermark:=10} ${wifi_country:=CA} ${cached_apps:=default}
+  : ${oc_master:=0} ${oc_cpu_uv:=0} ${oc_gpu:=0} ${oc_status:=off}
   : ${phh_effects:=0} ${governor:=schedplus} ${oc:=0} ${thermal:=stock} ${io_sched:=deadline} ${readahead:=512} ${swappiness:=100} ${tcp_cc:=bic}
 }
 putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
@@ -275,6 +276,11 @@ valid() {   # $1 key, $2 value
     cached_apps) oneof "$2" default 16 24 32 48;;
     compile_pkg|compile_pkg_profile|reset_pkg) pkgok "$2";;
     refresh_apps) oneof "$2" 1;;
+    oc_master) oneof "$2" 0 1;;
+    oc_cpu_uv) oneof "$2" 0 1 2 4;;
+    oc_gpu) oneof "$2" 0 730000 760000 800000;;
+    oc_profile) oneof "$2" maxstable;;
+    oc_stock) oneof "$2" 1;;
     *) return 0;;
   esac
 }
@@ -385,7 +391,7 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|apply_profile|delete_profile|profile_active|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -393,6 +399,9 @@ handle() {
       screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
       pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
+      oc_master|oc_cpu_uv|oc_gpu) putkey $k $v;;
+      oc_profile) for kv in oc_master=1 oc=1 oc_cpu_uv=0 oc_gpu=730000 preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; P=1; U=1; load; continue;;
+      oc_stock) for kv in oc_master=0 oc=0 oc_cpu_uv=0 oc_gpu=0 oc_status=off preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; rm -f $OCM; load; oc_off; P=1; U=1; continue;;
       save_profile) profile_save $v; putkey profile_active $v; load; continue;;
       delete_profile) profile_delete $v; [ "$profile_active" = "$v" ] && putkey profile_active ""; load; continue;;
       apply_profile) profile_apply $v && { P=1; U=1; Q=1; }; load; continue;;
@@ -421,6 +430,67 @@ handle() {
   publish
 }
 
+# ---------- overclock ----------
+# What the kernel really accepts (see README, "Overclock"): CPU clocks cannot go above the table, so the CPU part is a voltage trim (EEM offset, in
+# 6.25 mV steps, removed from the voltage the kernel computed). The GPU takes any frequency through gpufreq_fixed_freq_volt; only values from the
+# valid list are used, always at the top stock voltage (0.80 V). The marker $OCM is written before anything is applied and removed after 3 minutes
+# of stable running; a marker from an earlier boot means that boot died while overclocked.
+OCM=/data/local/tmp/oc_pending
+OCG=/proc/gpufreq; OCE=/proc/eem; OCT=/sys/class/thermal; OCB=/proc/sys/kernel/random/boot_id
+OCMAXT=85000; OC_ON=0; OC_CUR=; OC_T0=0
+ocst() { lock_wait; putkey oc_status "$1"; load; publish; rmdir $LOCK; }   # publishes oc_status=off|waiting|testing|active|reverted_after_crash|thermal_revert|gpu_failed|cpu_failed|unsupported
+ockeys() { lock_wait; putkey oc_master 0; [ "$1" = all ] && { putkey oc_cpu_uv 0; putkey oc_gpu 0; }; rmdir $LOCK; }
+ocwant() { [ "$oc_master" = 1 ] && { [ "$oc_cpu_uv" != 0 ] || [ "$oc_gpu" != 0 ]; }; }
+tmax() { cat $OCT/thermal_zone*/temp 2>/dev/null | sort -n | tail -n 1; }   # millidegrees, the hottest zone
+ocgtop() { sed -n '1s/.*freq = \([0-9]*\), volt = \([0-9]*\).*/\1 \2/p' $OCG/gpufreq_opp_dump; }   # top stock GPU OPP: "kHz 10uV"
+oc_off() {   # idempotent: stock voltage trim, GPU back on the OPP table, the saved GPU clock setting again
+  for b in L L_HI 2L 2L_HI; do wn $OCE/EEM_DET_$b/eem_offset 0; done
+  w $OCG/gpufreq_fixed_freq_volt "0 0"
+  set -- $(ocgtop); [ -n "$1" ] && w $OCG/gpufreq_opp_freq $1
+  calc; if [ "$gpu_eff" = 1 ]; then w $OCG/gpufreq_opp_freq $gpu_freq; else w $OCG/gpufreq_opp_freq 0; fi
+}
+ocfail() { oc_off; rm -f $OCM; OC_ON=0; ockeys all; ocst $1; log "overclock $1"; }
+oc_on() {
+  { cat $OCB; date +%s; } > $OCM; sync
+  OC_ON=1; OC_CUR="$oc_gpu/$oc_cpu_uv"; OC_T0=$(date +%s)
+  if [ "$oc_cpu_uv" != 0 ]; then
+    for b in L L_HI 2L 2L_HI; do wn $OCE/EEM_DET_$b/eem_offset -$oc_cpu_uv; done
+    [ "$(cat $OCE/EEM_DET_L/eem_offset 2>/dev/null)" = "-$oc_cpu_uv" ] || { ocfail cpu_failed; return; }
+  fi
+  if [ "$oc_gpu" != 0 ]; then
+    set -- $(ocgtop)
+    [ "$1/$2" = 680000/80000 ] || { ocfail unsupported; return; }   # only the known table: 680 MHz at 0.80 V
+    w $OCG/gpufreq_opp_freq 680000       # keeps the Vcore request at its top step, which is where the fixed voltage comes from
+    w $OCG/gpufreq_fixed_freq_volt "$oc_gpu 80000"; sleep 1
+    rf=$(sed -n 's/^real freq = \([0-9]*\),.*/\1/p' $OCG/gpufreq_var_dump); case $rf in ''|*[!0-9]*) rf=0;; esac
+    d=$((rf - oc_gpu)); [ $d -lt 0 ] && d=$((-d))
+    [ $d -gt $((oc_gpu / 50)) ] && { ocfail gpu_failed; return; }   # the PLL did not take the value (2 percent tolerance)
+  fi
+  ocst testing; log "overclock on gpu=$oc_gpu cpu_uv=$oc_cpu_uv"
+}
+oc_boot() {   # at daemon start: a marker from another boot means that boot ended while overclocked
+  [ -f $OCM ] || return
+  [ "$(sed -n 1p $OCM)" = "$(cat $OCB)" ] && return   # same boot: only the daemon restarted
+  rm -f $OCM; ockeys all; putkey oc_status reverted_after_crash; log "overclock reverted after a crash or reboot while overclocked"
+}
+oc_watch() {   # every 2 s from the daemon
+  load; sane oc_master 0; sane oc_cpu_uv 0; sane oc_gpu 0
+  t=$(tmax); t=${t:-0}
+  if [ "$OC_ON" = 1 ]; then
+    if [ "$t" -gt $OCMAXT ]; then oc_off; rm -f $OCM; OC_ON=0; ockeys; ocst thermal_revert; log "overclock thermal revert at $t"; return; fi
+    if ! ocwant; then oc_off; rm -f $OCM; OC_ON=0; ocst off; return; fi
+    [ "$OC_CUR" != "$oc_gpu/$oc_cpu_uv" ] && { oc_off; oc_on; return; }
+    [ -f $OCM ] && [ $(( $(date +%s) - OC_T0 )) -ge 180 ] && { rm -f $OCM; ocst active; }
+  elif ocwant; then
+    [ "$oc_status" != waiting ] && ocst waiting
+    [ $(( $(date +%s) - DSTART )) -lt 30 ] && return    # 30 s after boot_completed
+    if [ "$t" -gt $OCMAXT ]; then ockeys; ocst thermal_revert; return; fi
+    oc_on
+  elif [ "$oc_status" = waiting ]; then ocst off
+  fi
+}
+# ---------- end overclock ----------
+
 # ---------- daemon ----------
 [ -n "$1" ] && { case $1 in *w*) [ "$3" = request ] && handle;; esac; exit 0; }
 rmdir $LOCK $QL $RL 2>/dev/null; rm -f $QF $PST $AFAIL
@@ -432,7 +502,7 @@ rm -f $APP/request                          # the app recreates it; inotifyd wat
 [ -f $AFD ] && cat $AFD > $APP/apps_state   # the last compile state list, until the app asks for a new one
 w /proc/ppm/policy_status "2 0"; w /proc/ppm/policy_status "3 0"   # FORCE_LIMIT and PWR_THRO off
 w /proc/sys/kernel/printk "1 4 1 7"
-seedlive; load; profile; tune; [ "$cached_apps" != default ] && ext cached_apps; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
+seedlive; load; oc_boot; load; profile; tune; [ "$cached_apps" != default ] && ext cached_apps; night_; nav; anim; density_; bootanim; pq_apply; [ "$logging" = 1 ] && logging
 ( sleep 12; load; black; sleep 25; black ) &
 # Treble Settings > Audio effects attaches DAP, Dynamics Processing, Loudness Enhancer, Visualizer and Downmix to every playback session; on this tablet
 # that cuts app audio after a few ms. Keep them off unless the user allows them (phh_effects=1).
@@ -466,5 +536,7 @@ enforce() {
 CS=
 cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; [ -d $LOCK ] && return; [ "$CS" = running ] && apps_refresh_bg; CS=$n; load; publish; }
 ( while sleep 5; do enforce; cstat_pub; done ) &
+DSTART=$(date +%s)
+( while sleep 2; do oc_watch; done ) &
 publish; log "daemon ready"
 exec inotifyd /system/bin/tablet_tunerd.sh $APP:nw   # toybox mask parsing is quirky: single letters are rejected, "wn" drops w

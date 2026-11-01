@@ -34,9 +34,9 @@ public class MainActivity extends Activity {
     private float dp;
     private String page = HOME;
     private TextView status;
-    private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView;
+    private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshApps(); ui.postDelayed(this, 1000); } };
+    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
     private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
 
     // ---------- frame ----------
     private void build() {
-        liveCpu = liveGpu = liveMem = liveHeat = compileView = null;
+        liveCpu = liveGpu = liveMem = liveHeat = compileView = ocView = null;
         appsBox = null; appsInfo = null;
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(surface());
@@ -254,6 +254,7 @@ public class MainActivity extends Activity {
 
         switch (page) {
             case "perf": pagePerf(); break;
+            case "oc": pageOc(); break;
             case "memory": pageMemory(); break;
             case "picture": pagePicture(); break;
             case "look": pageLook(); break;
@@ -269,6 +270,7 @@ public class MainActivity extends Activity {
     private String pageTitle() {
         switch (page) {
             case "perf": return "Performance details";
+            case "oc": return "Overclock";
             case "memory": return "Memory and storage";
             case "picture": return "Picture";
             case "look": return "Look";
@@ -372,6 +374,7 @@ public class MainActivity extends Activity {
         liveCard();
         LinearLayout c = group(null);
         rowGo(c, "Performance details", perfSummary(), "perf");
+        rowGo(c, "Overclock", ocSummary(), "oc");
         profileRows(c);
         c = group(null);
         rowGo(c, "Picture", pictureSummary(), "picture");
@@ -411,7 +414,7 @@ public class MainActivity extends Activity {
 
     private String perfSummary() {
         String g = get("gpu_freq", "680000");
-        return ("1".equals(get("oc", "0")) ? "Overclocked, " : "") + "GPU " + ("0".equals(g) ? "automatic" : (Integer.parseInt(g) / 1000) + " MHz")
+        return ("1".equals(get("oc", "0")) ? "Max clocks, " : "") + "GPU " + ("0".equals(g) ? "automatic" : (Integer.parseInt(g) / 1000) + " MHz")
             + ", thermal " + ("off".equals(get("thermal", "stock")) ? "limit off" : "stock");
     }
     private String pictureSummary() {
@@ -446,8 +449,8 @@ public class MainActivity extends Activity {
         c = group("Power and heat");
         rowChoice(c, "Power mode", "MediaTek power mode and clock floor. The presets choose it for you.", "perf_profile",
             new String[]{"Battery (low power)", "Balanced", "Performance (sports)"}, new String[]{"battery", "balanced", "performance"}, "balanced");
-        rowSwitch(c, "Overclock", "Pins both CPU clusters at their top speed. Runs hot and drains the battery.", "oc", "0");
-        rowChoice(c, "CPU governor", "Used when Overclock is off", "governor", list("govs", "schedplus,ondemand,interactive,performance,powersave"), list("govs", "schedplus,ondemand,interactive,performance,powersave"), "schedplus");
+        rowSwitch(c, "Maximum clocks", "Pins both CPU clusters at their top stock speed. Runs hot and drains the battery. More options under Overclock on the home screen.", "oc", "0");
+        rowChoice(c, "CPU governor", "Used when Maximum clocks is off", "governor", list("govs", "schedplus,ondemand,interactive,performance,powersave"), list("govs", "schedplus,ondemand,interactive,performance,powersave"), "schedplus");
         rowChoice(c, "Thermal limit", "Off removes MediaTek's heat limit. Not recommended while charging.", "thermal", new String[]{"Stock", "Off"}, new String[]{"stock", "off"}, "stock");
         c = group("Touch and clocks");
         rowChoice(c, "Touch boost length", "How long the clocks stay raised after a touch. Stock is 100 ms.", "touch_duration_ms",
@@ -465,6 +468,65 @@ public class MainActivity extends Activity {
         c = group("Idle and statistics");
         rowSwitch(c, "Deep idle (MCDI)", "Turning it off cuts wake up delay and costs idle battery.", "mcdi", "1");
         rowSwitch(c, "Scheduler statistics", "Kernel counters used by profilers. Off saves a little CPU time.", "schedstats", "0");
+    }
+
+
+    // ---------- overclock ----------
+    private String ocSummary() {
+        boolean on = "1".equals(get("oc_master", "0")) && (!"0".equals(get("oc_gpu", "0")) || !"0".equals(get("oc_cpu_uv", "0")));
+        String st_ = get("oc_status", "off");
+        if (st_.startsWith("reverted") || st_.endsWith("revert")) return "Went back to stock, tap for the reason";
+        if (!on) return "1".equals(get("oc", "0")) ? "Off, top clocks pinned" : "Off, everything at stock";
+        return ("0".equals(get("oc_gpu", "0")) ? "" : "GPU " + (Integer.parseInt(get("oc_gpu", "0")) / 1000) + " MHz") + ("0".equals(get("oc_gpu", "0")) || "0".equals(get("oc_cpu_uv", "0")) ? "" : ", ")
+            + ("0".equals(get("oc_cpu_uv", "0")) ? "" : "CPU voltage trim") + ", " + ocStatusWord(st_);
+    }
+    private static String ocStatusWord(String s) {
+        switch (s) { case "testing": return "testing"; case "active": return "stable"; case "waiting": return "waiting"; default: return "off"; }
+    }
+    private static String ocStatusText(String s) {
+        switch (s) {
+            case "waiting": return "Waiting. It is applied 30 seconds after boot.";
+            case "testing": return "On. Kept for 3 minutes of stable running before it counts as safe.";
+            case "active": return "On and stable.";
+            case "reverted_after_crash": return "Went back to stock: the tablet restarted while overclocked. Turn it on again with a lower setting to retry.";
+            case "thermal_revert": return "Went back to stock: a temperature sensor passed 85 °C.";
+            case "gpu_failed": return "Went back to stock: the GPU did not take the clock.";
+            case "cpu_failed": return "Went back to stock: the kernel did not take the CPU voltage trim.";
+            case "unsupported": return "Not available: this kernel's GPU table is not the expected one.";
+            default: return "Off. Everything runs at stock.";
+        }
+    }
+    private String ocLine(Map<String, String> s) {
+        long g = num(grep("/proc/gpufreq/gpufreq_var_dump", "real freq"));
+        return ocStatusText(get0(s, "oc_status").isEmpty() ? "off" : get0(s, "oc_status")) + "\nGPU clock now " + (g < 0 ? "–" : (g / 1000) + " MHz");
+    }
+    private void refreshOc() { if (ocView != null) ocView.setText(ocLine(Cfg.load(this))); }
+
+    private void confirmOc(final Runnable go) {
+        new AlertDialog.Builder(this).setTitle("Overclock").setMessage("This can crash or freeze the tablet, shortens battery life and the life of the chip, and a hard freeze can corrupt data. Back up what matters first.\n\nIf the tablet restarts while an overclock is on, it goes back to stock by itself.")
+            .setNegativeButton("Cancel", (d, w) -> build()).setPositiveButton("I understand", (d, w) -> go.run()).setOnCancelListener(d -> build()).show();
+    }
+
+    private void pageOc() {
+        TextView warn = text("Warning: overclocking can crash or freeze the tablet, uses more battery, wears the chip faster, and a hard freeze can corrupt data. Nothing is applied until 30 seconds after boot. Above 85 °C, or after a restart while overclocked, everything goes back to stock.", 13.5f, false, 0xFFFF8A4C);
+        warn.setPadding(px(10), px(6), px(10), px(2)); col.addView(warn);
+        liveCard();
+        LinearLayout c = group("Status");
+        ocView = text(ocLine(st), 14, false, ink());
+        ocView.setPadding(px(20), px(12), px(20), px(12)); c.addView(ocView);
+        c = group("Switch");
+        rowSwitchLike(c, "Allow overclock", "Master switch for the voltage trim and the GPU clock below. Off puts them back to stock.", "1".equals(get("oc_master", "0")), on -> {
+            if (on) confirmOc(() -> { set("oc_master", "1"); build(); }); else { set("oc_master", "0"); build(); } });
+        rowAction(c, "Max stable", "Turns it on with the safest useful settings: top CPU clocks pinned, GPU 730 MHz at the stock 0.80 V, no voltage change.", () -> confirmOc(() -> { set("oc_profile", "maxstable"); build(); }));
+        c = group("CPU");
+        rowSwitch(c, "Maximum clocks", "Pins both CPU clusters at their top stock speed, 2.30 GHz fast cores and 1.80 GHz efficiency cores. The kernel has no higher step, so this is not an overclock.", "oc", "0");
+        rowChoice(c, "CPU voltage trim", "Lowers the CPU voltage at every step, 6 mV per notch. Less heat at the same speed. Too low freezes the tablet.", "oc_cpu_uv",
+            new String[]{"Stock", "-6 mV", "-12 mV", "-25 mV"}, new String[]{"0", "1", "2", "4"}, "0");
+        c = group("GPU");
+        rowChoice(c, "GPU overclock", "Raises the GPU above its 680 MHz top step at the same 0.80 V. Replaces the GPU clock setting while it is on.", "oc_gpu",
+            new String[]{"Stock (680 MHz)", "730 MHz (Max stable)", "760 MHz", "800 MHz"}, new String[]{"0", "730000", "760000", "800000"}, "0");
+        c = group(null);
+        rowAction(c, "Back to stock", "Turns off everything on this page right away, including Maximum clocks.", () -> { set("oc_stock", "1"); build(); });
     }
 
     private void pageMemory() {
