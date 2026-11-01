@@ -73,3 +73,6 @@ fresh 1 1 0; DSTART=$(( $(date +%s) - 60 )); oc_watch; putkey oc_master 0; oc_wa
 ok "off: status" "$oc_status" off; ok "off: offset" "$(cat $OCE/EEM_DET_L/eem_offset)" 0; ok "off: marker" "$([ -f $OCM ] && echo y || echo n)" n
 
 rm -rf $T; [ $fail = 0 ] && echo "all ok"; exit $fail
+
+# saved profiles keep the overclock keys
+grep -q "^PKEYS=.*oc_master oc_cpu_uv oc_gpu" device/tablet_tunerd.sh && echo "ok profiles include oc keys" || { echo "FAIL profiles miss oc keys"; exit 1; }

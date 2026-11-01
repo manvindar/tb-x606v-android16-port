@@ -320,9 +320,9 @@ pq_apply() {
   done
   [ $ch = 1 ] && { stop pq-2-2; sleep 1; start pq-2-2; log "picture quality applied"; }
 }
-# saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory and picture keys, not the look.
+# saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory, picture and overclock keys (oc_master, oc_cpu_uv, oc_gpu), not the look. A profile saved before the overclock keys existed leaves the overclock as it is when applied; one that has them switches it on or off and the crash and thermal guards still apply.
 PF=/data/local/tmp/tuner.profiles
-PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color"
+PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
 profile_save() {   # $1 name
   [ -f $PF ] && grep -v "^$1|" $PF > $PF.t || : > $PF.t
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done

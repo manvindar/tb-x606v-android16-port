@@ -248,3 +248,5 @@ adb reboot
 ```
 
 The boot animation option copies one of `bootanimation-gemini.zip` (the default), `bootanimation-arrow.zip`, `bootanimation-galaxy.zip`, `bootanimation-aurora.zip` or `bootanimation-stock.zip` from `/system/product/media` over `bootanimation.zip`. The image builder installs the gemini, arrow, stock and (with `--galaxy`) galaxy files; the aurora file is not in this repository. `boot-animation/bootanimation-gemini.zip` is the Pixel 10 Gemini animation (see `NOTICE-gemini.md`; `make_gemini_fit.py` rebuilds it from the original), `boot-animation/bootanimation-arrow.zip` is the ArrowOS animation, and `boot-animation/make_galaxy.py` renders the galaxy one. `build/build_image.py` in the parent directory installs all of this into a system image, so a manual install is only needed on a running ROM.
+
+Saved profiles also store the overclock keys (`oc_master`, `oc_cpu_uv`, `oc_gpu`). Applying a profile that has them switches the overclock on or off as saved (the crash and thermal guards still apply); a profile saved earlier leaves the overclock unchanged.
