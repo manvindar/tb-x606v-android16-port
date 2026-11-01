@@ -231,7 +231,7 @@ putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
 publish() {   # copy state (+ a status line) to the app; the file is pre-created with the app's owner/context
   [ -f $APP/state ] || return
   gpu_eff=0; [ "$gpu_freq" != 0 ] && [ "$perf_profile" != battery ] && gpu_eff=1
-  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; pubcompile; pubapps; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $S.pub
+  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; pubcompile; pubapps; echo "pq_live=$(pq_live)"; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $S.pub
   cat $S.pub > $APP/state   # building takes seconds (cmd overlay list), so the app's file is written in one go and never read half empty
 }
 
@@ -300,7 +300,7 @@ seedlive() {
   has bg_procs || putkey bg_procs "$(v "$(device_config get activity_manager max_cached_processes)" default)"
   has adb_tcp || putkey adb_tcp "$([ "$(getprop service.adb.tcp.port)" -gt 0 ] 2>/dev/null && echo 1 || echo 0)"
   has serial_console || putkey serial_console "$([ "$(getprop init.svc.console)" = running ] && echo 1 || echo 0)"
-  for k in pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
     has $k || { pv=$(getprop persist.vendor.sys.pq.$(pq_prop $k)); [ -n "$pv" ] && putkey $k $pv; }
   done
   # keys added later: an existing install takes the values of its current preset (stock for battery and balanced)
@@ -310,19 +310,32 @@ seedlive() {
   has bt_work || putkey bt_work "$([ -n "$(getprop persist.sys.bt.unsupported.commands)" ] && echo 1 || echo 0)"
 }
 # MediaTek picture quality (MiraVision): the PQ HAL reads these persist props only when it starts, so it is restarted when one changes.
-pq_prop() { case $1 in pq_dre) echo mdp.dre.en;; pq_vp_dre) echo mdp.vp.dre.en;; pq_hdr) echo hdr.en;; pq_ultrares) echo ultrares.en;; pq_shp) echo shp.idx;; pq_color) echo mdp.color.idx;; esac; }
+# What the HAL does with them (vendor.mediatek.hardware.pq@2.3-impl.so): picmode 0 = factory tables, 2 = "user defined", where contrastidx, gsatidx (0..9, 4 neutral), gamma.index (0..14, 7 neutral) and shp.idx (0..11, 2 neutral) are read at start and programmed into the display colour and gamma blocks. Outside mode 2 those four are ignored. The DRE, HDR and ultra resolution props only reach shared memory for engines this SoC/kernel does not have (no AAL/DRE30 in the kernel, no DRE engine in libdpframework), so they change nothing; they are still accepted so old profiles load.
+pq_prop() { case $1 in pq_mode) echo picmode;; pq_contrast) echo contrastidx;; pq_sat) echo gsatidx;; pq_gamma) echo gamma.index;; pq_dre) echo mdp.dre.en;; pq_vp_dre) echo mdp.vp.dre.en;; pq_hdr) echo hdr.en;; pq_ultrares) echo ultrares.en;; pq_shp) echo shp.idx;; pq_color) echo mdp.color.idx;; esac; }
 pq_apply() {
   ch=0
-  for k in pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
     eval v=\$$k; [ -z "$v" ] && continue
+    valid $k "$v" || { log "pq: skip bad $k=$v"; continue; }
     p=persist.vendor.sys.pq.$(pq_prop $k)
     [ "$(getprop $p)" != "$v" ] && { setprop $p $v; ch=1; }
   done
-  [ $ch = 1 ] && { stop pq-2-2; sleep 1; start pq-2-2; log "picture quality applied"; }
+  [ $ch = 1 ] || return 0
+  stop pq-2-2; sleep 1; start pq-2-2; sleep 3
+  if [ "$(getprop init.svc.pq-2-2)" = running ]; then log "picture quality applied"
+  else   # the HAL did not come back with these values: go back to the factory picture so the display keeps its colour tables
+    log "picture quality FAILED, back to factory mode"
+    setprop persist.vendor.sys.pq.picmode 0; putkey pq_mode 0; stop pq-2-2; sleep 1; start pq-2-2
+  fi
+}
+# one word for the app: service state, then the values the HAL logged when it last programmed the display in user mode (the log may be off)
+pq_live() {
+  l=$(logcat -d -s PQ:D 2>/dev/null | grep 'Init_PQ_Userdef, gsat' | tail -n 1 | sed -n 's/.*gsat\[\([0-9]*\)\], cont\[\([0-9]*\)\], bri\[\([0-9]*\)\].*/gsat\1,cont\2,bri\3/p')
+  echo "$(getprop init.svc.pq-2-2),mode$(getprop persist.vendor.sys.pq.picmode | grep . || echo 0),${l:-nolog}"
 }
 # saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory, picture and overclock keys (oc_master, oc_cpu_uv, oc_gpu), not the look. A profile saved before the overclock keys existed leaves the overclock as it is when applied; one that has them switches it on or off and the crash and thermal guards still apply.
 PF=/data/local/tmp/tuner.profiles
-PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
+PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
 pf_line() { while IFS= read -r l_; do [ "${l_%%|*}" = "$1" ] && { echo "$l_"; return 0; }; done < $PF 2>/dev/null; return 1; }   # exact name match (no regex), prints the line
 profile_save() {   # $1 name; an existing profile of that name is replaced in place, a new one goes last
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done
@@ -358,6 +371,13 @@ valid() {   # $1 key, $2 value
     compile_pkg|compile_pkg_profile|reset_pkg) pkgok "$2";;
     refresh_apps) oneof "$2" 1;;
     oc_master) oneof "$2" 0 1;;
+    pq_mode) oneof "$2" 0 2;;
+    pq_contrast|pq_sat) oneof "$2" 0 1 2 3 4 5 6 7 8 9;;
+    pq_gamma) oneof "$2" 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14;;
+    pq_shp) oneof "$2" 0 1 2 3 4 5 6 7 8 9 10 11;;
+    pq_dre|pq_vp_dre|pq_ultrares) oneof "$2" 0 1 2;;
+    pq_hdr) oneof "$2" 0 1;;
+    pq_color) oneof "$2" 0 1 2 3;;
     oc_cpu_uv) oneof "$2" 0 1 2 4;;
     oc_gpu) oneof "$2" 0 730000 760000 800000;;
     oc_profile) oneof "$2" maxstable;;
@@ -472,14 +492,14 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
       governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster|touch_duration_ms|touch_opp|touch_boost|schedstats|down_throttle|up_throttle|cap_margin|mcdi|watermark) U=1; putkey $k $v;;
       screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
-      pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
+      pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
       oc_master|oc_cpu_uv|oc_gpu) putkey $k $v;;
       oc_profile) for kv in oc_master=1 oc=1 oc_cpu_uv=0 oc_gpu=730000 preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; P=1; U=1; load; continue;;
       oc_stock) for kv in oc_master=0 oc=0 oc_cpu_uv=0 oc_gpu=0 oc_status=off preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; rm -f $OCM; load; oc_off; P=1; U=1; continue;;

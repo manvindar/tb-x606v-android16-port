@@ -747,8 +747,8 @@ public class MainActivity extends Activity {
             + ", thermal " + ("off".equals(get("thermal", "stock")) ? "limit off" : "stock");
     }
     private String pictureSummary() {
-        String shp = get("pq_shp", "2");
-        return "Sharpness " + ("0".equals(shp) ? "off" : shp) + ", dynamic range " + pick(get("pq_dre", "2"), new String[]{"0", "1", "2"}, new String[]{"off", "on", "automatic"}, "automatic");
+        if (!"2".equals(get("pq_mode", "0"))) return "Factory picture";
+        return "Custom: contrast " + get("pq_contrast", "4") + ", saturation " + get("pq_sat", "4") + ", gamma " + get("pq_gamma", "7");
     }
     private String lookSummary() {
         String n = pick(get("night", "yes"), new String[]{"auto", "no", "yes"}, new String[]{"Automatic", "Light", "Dark"}, "Dark");
@@ -882,27 +882,38 @@ public class MainActivity extends Activity {
     }
 
     private void pagePicture() {
-        TextView hint = text("MediaTek's picture engine. Every change restarts it, which takes about two seconds. The sharpness and colour numbers are MediaTek indexes: judge them by eye on a video.", 13.5f, false, dim());
+        TextView hint = text("MediaTek's picture engine (MiraVision). Every change restarts it, which takes a few seconds and can flicker the screen once. This tablet has no dynamic contrast, HDR or ultra resolution hardware, so those switches are gone. Contrast, saturation, gamma and sharpness only act in Custom mode. The numbers are MediaTek indexes: judge them by eye on a grey ramp.", 13.5f, false, dim());
         hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
-        LinearLayout c = group("Quick looks");
+        LinearLayout c = group("Engine");
+        row(c, "Picture engine", "Service, mode and the values it logged when it last set the display", text(pqLive(), 14, true, accent()));
+        c = group("Quick looks");
         String[][] looks = {
-            {"Clean", "No sharpening, factory contrast. Best for compressed video.", "pq_shp=0 pq_ultrares=0 pq_dre=2 pq_vp_dre=1 pq_hdr=1 pq_color=0"},
-            {"Factory", "What the tablet shipped with.", "pq_shp=2 pq_ultrares=2 pq_dre=2 pq_vp_dre=1 pq_hdr=1 pq_color=0"},
-            {"Punchy", "Stronger contrast and detail. Can look harsh.", "pq_shp=3 pq_ultrares=2 pq_dre=1 pq_vp_dre=1 pq_hdr=1 pq_color=0"}};
+            {"Factory", "The factory picture tables.", "pq_mode=0"},
+            {"Clean", "Custom, neutral contrast and colour, no sharpening. Best for compressed video.", "pq_mode=2 pq_contrast=4 pq_sat=4 pq_gamma=7 pq_shp=0"},
+            {"Punchy", "Custom, more contrast and colour, a little sharpening. Can look harsh.", "pq_mode=2 pq_contrast=6 pq_sat=6 pq_gamma=7 pq_shp=3"}};
         for (final String[] l : looks) {
             row(c, l[0], l[1], text("Apply", 15, true, accent())).setOnClickListener(v -> {
                 for (String kv : l[2].split(" ")) { String[] p = kv.split("="); st.put(p[0], p[1]); Cfg.request(this, p[0], p[1]); }
-                setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 3000);
+                setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 5000);
             });
         }
-        final String[] oao = {"Off", "On", "Automatic"}, oaov = {"0", "1", "2"};
         c = group("Fine control");
-        rowChoice(c, "Video contrast boost", "Local contrast for video playback", "pq_vp_dre", oao, oaov, "1");
-        rowChoice(c, "Screen contrast boost", "Contrast for the whole screen", "pq_dre", oao, oaov, "2");
-        rowChoice(c, "Ultra resolution", "Upscaling and detail enhancement", "pq_ultrares", oao, oaov, "2");
-        rowSwitch(c, "HDR video", "Tone-maps HDR clips for this screen", "pq_hdr", "1");
-        rowSlider(c, "Sharpness", "0 is off, 2 is the factory value", "pq_shp", 9, 2, new String[]{"Off", "1", "2", "3", "4", "5", "6", "7", "8", "9"});
-        rowChoice(c, "Colour profile", "MediaTek colour index, 0 is the factory value", "pq_color", new String[]{"0 (factory)", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0");
+        rowChoice(c, "Picture mode", "Custom uses the sliders below", "pq_mode", new String[]{"Factory", "Custom"}, new String[]{"0", "2"}, "0");
+        String[] ten = {"0", "1", "2", "3", "4 (neutral)", "5", "6", "7", "8", "9"};
+        rowSlider(c, "Contrast", "Screen contrast, 4 is neutral", "pq_contrast", 9, 4, ten);
+        rowSlider(c, "Saturation", "Screen colour strength, 4 is neutral", "pq_sat", 9, 4, ten);
+        rowSlider(c, "Gamma", "Mid-tone curve, 0 to 14, 7 is neutral", "pq_gamma", 14, 7, new String[]{"0", "1", "2", "3", "4", "5", "6", "7 (neutral)", "8", "9", "10", "11", "12", "13", "14"});
+        rowSlider(c, "Sharpness", "0 to 11, 2 is the factory value", "pq_shp", 11, 2, null);
+        rowChoice(c, "Video colour index", "MediaTek video colour index. Effect not verified on this tablet", "pq_color", new String[]{"0", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0");
+    }
+
+    /** The daemon's pq_live line: "running,mode2,gsat4,cont6,bri4" or "...,nolog" when the log is off. */
+    private String pqLive() {
+        String v = get("pq_live", "");
+        if (v.isEmpty()) return "unknown";
+        String[] p = v.split(",");
+        String s = ("running".equals(p[0]) ? "running" : "NOT running") + ", " + (p.length > 1 && "mode2".equals(p[1]) ? "custom" : "factory");
+        return p.length > 4 ? s + ", set " + p[2] + " " + p[3] + " " + p[4] : s;
     }
 
     private void pageLook() {

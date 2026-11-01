@@ -7,7 +7,7 @@ log() { echo "$*" >> $TD/log; }
 S=$TD/state; PF=$TD/pf; APP=$TD/app; LOCK=$TD/lock; mkdir -p $APP
 sleep() { :; }; sync() { :; }; publish() { :; }; profile() { :; }; tune() { :; }; theme() { :; }; pq_apply() { :; }
 ext() { :; }; oc_off() { :; }; reboot() { echo reboot >> $TD/bad; }; pkill() { echo pkill >> $TD/bad; }; OCM=$TD/oc_pending
-eval "$(sed -n '/^oneof() /p;/^valid() /,/^}/p;/^putkey() /p;/^load() {/,/^}/p;/^pf_line() /p;/^PKEYS=/p;/^profile_save() /,/^}/p;/^profile_delete() /p;/^profile_apply() /,/^}/p;/^tweakset() /,/^}/p;/^presets() /,/^}/p;/^handle() {/,/^}/p' $D/device/tablet_tunerd.sh)"
+eval "$(sed -n '/^oneof() /p;/^valid() /,/^}/p;/^putkey() /p;/^load() {/,/^}/p;/^pf_line() /p;/^PKEYS=/p;/^profile_save() /,/^}/p;/^profile_delete() /p;/^profile_apply() /,/^}/p;/^tweakset() /,/^}/p;/^presets() /,/^}/p;/^handle() {/,/^}/p;/^pq_prop() /p;/^pq_apply() {/,/^}/p' $D/device/tablet_tunerd.sh)"
 st() { sed -n "s/^$1=//p" $S | tail -1; }
 names() { cut -d'|' -f1 $PF | tr '\n' ' '; }
 req() { printf '%s\n' "$@" > $APP/request; ( handle ); }   # handle() ends in exit and a trap, so it runs in a subshell
@@ -88,5 +88,28 @@ req "profile_base=hacked"
 ok "profile_base cannot be requested" "$(st profile_base)" keep
 req update_profile=keep
 ok "valid update still works" "$(st profile_active)" keep
+
+# picture quality: validation of the new keys and what pq_apply writes (getprop, setprop, stop and start are stubs)
+: > $S; load; PQ=$TD/props; : > $PQ; svc=running
+getprop() { case $1 in init.svc.pq-2-2) echo $svc;; *) sed -n "s/^$1=//p" $PQ | tail -1;; esac; }
+setprop() { grep -v "^$1=" $PQ > $PQ.t; echo "$1=$2" >> $PQ.t; mv $PQ.t $PQ; }
+stop() { echo stop >> $TD/pqev; }; start() { echo start >> $TD/pqev; }
+for kv in pq_mode=1 pq_mode=3 pq_contrast=10 pq_sat=-1 pq_gamma=15 pq_shp=12 pq_color=4 pq_dre=3 pq_hdr=2; do valid ${kv%%=*} ${kv#*=} && echo "FAIL accepted $kv" && fail=1; done
+for kv in pq_mode=2 pq_contrast=9 pq_sat=0 pq_gamma=14 pq_shp=11 pq_color=3 pq_dre=2 pq_hdr=1; do valid ${kv%%=*} ${kv#*=} || { echo "FAIL rejected $kv"; fail=1; }; done
+eval "$(sed -n '/^pq_apply() {/,/^}/p;/^pq_prop() /p' $D/device/tablet_tunerd.sh)"
+pq_mode=2; pq_contrast=7; pq_sat=; pq_gamma=7; pq_shp=; pq_color=; pq_dre=; pq_vp_dre=; pq_hdr=; pq_ultrares=
+pq_apply
+ok "pq: mode prop" "$(getprop persist.vendor.sys.pq.picmode)" 2
+ok "pq: contrast prop" "$(getprop persist.vendor.sys.pq.contrastidx)" 7
+ok "pq: gamma prop" "$(getprop persist.vendor.sys.pq.gamma.index)" 7
+ok "pq: unset key leaves its prop alone" "$(getprop persist.vendor.sys.pq.gsatidx)" ""
+ok "pq: one restart" "$(tr '\n' ' ' < $TD/pqev)" "stop start "
+rm $TD/pqev; pq_apply
+ok "pq: same values, no restart" "$([ -f $TD/pqev ] && echo restarted || echo none)" none
+pq_contrast=99; pq_apply
+ok "pq: bad value never reaches a prop" "$(getprop persist.vendor.sys.pq.contrastidx)" 7
+pq_contrast=3; svc=stopped; pq_apply
+ok "pq: failed start falls back to factory mode" "$(getprop persist.vendor.sys.pq.picmode)" 0
+ok "pq: failed start is saved" "$(st pq_mode)" 0
 
 rm -rf $TD; exit $fail
