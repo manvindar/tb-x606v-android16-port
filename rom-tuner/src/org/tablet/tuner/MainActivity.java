@@ -36,7 +36,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
+    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshProgress(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
     private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
@@ -224,7 +224,7 @@ public class MainActivity extends Activity {
     // ---------- frame ----------
     private void build() {
         liveCpu = liveGpu = liveMem = liveHeat = compileView = ocView = null;
-        appsBox = null; appsInfo = null;
+        appsBox = null; appsInfo = null; progBox = null;
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(surface());
         LinearLayout outer = new LinearLayout(this);
@@ -315,7 +315,71 @@ public class MainActivity extends Activity {
     }
     /** The compile run ends on its own, so the System page re-reads the status key while it is open. */
     private void refreshCompile() {
-        if (compileView != null) compileView.setText(compileLabel(Cfg.load(this).getOrDefault("compile_status", "idle")));
+        if (compileView == null) return;
+        Map<String, String> s = liveState();
+        if (s != null) compileView.setText(compileLabel(s.getOrDefault("compile_status", "idle")));
+    }
+    /** The state file as the app reads it, or null while it looks half written (the daemon ends every complete copy with status=). */
+    private Map<String, String> liveState() {
+        Map<String, String> s = Cfg.load(this);
+        return !s.isEmpty() && !s.containsKey("status") ? null : s;
+    }
+
+    // ---------- compile progress block (System page "App speed" and the per app page) ----------
+    private LinearLayout progBox;
+    private TextView progTitle, progText;
+    private ProgressBar progBar;
+
+    /** Hidden until the daemon publishes progress keys; an old daemon never does, and the pages look as before. */
+    private void progressBlock(LinearLayout card) {
+        progBox = new LinearLayout(this);
+        progBox.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(26));
+        progBox.setBackground(g);
+        progBox.setPadding(px(20), px(14), px(20), px(14));
+        progTitle = text("", 16, true, ink());
+        progBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progBar.setMax(100);
+        progBar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent()));
+        progBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(line()));
+        progBar.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(accent()));
+        progText = text("", 13, false, dim());
+        progBox.addView(progTitle);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, px(8)); bp.setMargins(0, px(10), 0, px(8));
+        progBox.addView(progBar, bp);
+        progBox.addView(progText);
+        progBox.setVisibility(View.GONE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(10), 0, px(4));
+        col.addView(progBox, col.indexOfChild(card), lp);
+    }
+
+    private String appName(String pkg) {
+        ArrayList<App> all = appsAll;
+        if (all != null) for (App a : all) if (a.pkg.equals(pkg)) return a.label + " (" + pkg + ")";
+        return pkg;
+    }
+
+    private void refreshProgress() {
+        if (progBox == null) return;
+        Map<String, String> s = liveState();
+        if (s == null) return;
+        Prog p = Prog.parse(s);
+        String sum = Prog.summary(s);
+        if (p == null && sum.isEmpty()) { progBox.setVisibility(View.GONE); return; }
+        progBox.setVisibility(View.VISIBLE);
+        if (p == null) {   // no run going on, the daemon left the summary of the last one
+            progTitle.setText("Last compile run");
+            progBar.setVisibility(View.GONE);
+            progText.setText(sum);
+            return;
+        }
+        progBar.setVisibility(View.VISIBLE);
+        progBar.setIndeterminate(p.total <= 0);
+        progBar.setProgress(p.percent());
+        String t = p.current.isEmpty() ? "Compiling apps…" : p.compiling ? "Compiling " + appName(p.current) : "Compiling apps…";
+        progTitle.setText(t);
+        // the -a step names an app only after it is done, so there it is the last one finished, not the current one
+        progText.setText((!p.compiling && !p.current.isEmpty() ? "Last finished: " + appName(p.current) + "\n" : "") + p.detail(System.currentTimeMillis()));
     }
     private void compile(String key) {
         Map<String, String> s = Cfg.load(this);
@@ -709,6 +773,7 @@ public class MainActivity extends Activity {
         TextView hint = text("Tap an app to compile it for faster launches or to put it back to the system default. Apps are compiled one at a time.", 13.5f, false, dim());
         hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
         LinearLayout c = group(null);
+        progressBlock(c);
         rowAction(c, "Compile all not compiled", "Compiles every app that is not at speed yet, apps at speed profile included. Runs in the background and takes 10 to 15 minutes.", () -> compile("compile_now"));
 
         appsInfo = text("", 13.5f, false, dim());
@@ -783,7 +848,8 @@ public class MainActivity extends Activity {
     /** Runs every second while the page is open: re-reads the state copy and the list file and redraws only when something changed. */
     private void refreshApps() {
         if (appsInfo == null) return;
-        Map<String, String> s = Cfg.load(this);
+        Map<String, String> s = liveState();
+        if (s == null) return;
         appsSt = s;
         String stamp = get0(s, "apps_state_time"), rf = get0(s, "apps_refresh");
         if (appStates == null || (!stamp.isEmpty() && !stamp.equals(appsStamp))) {
@@ -802,13 +868,16 @@ public class MainActivity extends Activity {
             info = "A system compile is running. Wait for it to finish before compiling one app.";
         } else if (job.endsWith(":running")) {
             info = "Compiling " + job.substring(0, job.length() - 8) + (waiting > 0 ? ", " + waiting + " waiting" : "") + ".";
+        } else if ("running".equals(rf)) {
+            info = "Reading the new compile states…";
         } else {
             long t = 0; try { t = Long.parseLong(appsStamp) * 1000; } catch (Exception ignored) { }
             info = "Compile states read at " + (t > 0 ? java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(new java.util.Date(t)) : "an unknown time") + ". Tap here to read them again.";
             if (t > 0 && now - t > 300000 && now - appsAsked > 60000) askApps();
         }
         appsInfo.setText(info);
-        String sig = appsStamp + "|" + job + "|" + queue + "|" + s.get("compile_status") + "|" + (appStates == null);
+        String sig = appsStamp + "|" + job + "|" + queue + "|" + s.get("compile_status") + "|" + (appStates == null)
+            + "|" + get0(s, "compile_current") + "|" + get0(s, "compile_current_state") + "|" + get0(s, "compile_done") + "|" + get0(s, "compile_summary");
         if (!sig.equals(appsSig)) { appsSig = sig; fillApps(); }
     }
 
@@ -832,7 +901,10 @@ public class MainActivity extends Activity {
         int i = job.lastIndexOf(':');
         if (i > 0) { jp = job.substring(0, i); js = job.substring(i + 1); }
         if (a.pkg.equals(jp) && "running".equals(js)) return "Compiling…";
-        if (("," + get0(appsSt, "compile_queue")).contains("," + a.pkg + ",")) return "Waiting";
+        // a bulk run names the app it is on (compile_current); old daemons publish nothing here
+        if (a.pkg.equals(get0(appsSt, "compile_current")) && "compiling".equals(get0(appsSt, "compile_current_state"))
+            && ("running".equals(get0(appsSt, "compile_status")) || "running".equals(js))) return "Compiling…";
+        if (("," + get0(appsSt, "compile_queue")).contains("," + a.pkg + ",")) return "Queued";
         if (a.pkg.equals(jp) && "failed".equals(js)) return "Failed";
         if (a.pkg.equals(jp) && "done".equals(js)) return "Done, " + baseState(a).toLowerCase(Locale.US);
         return baseState(a);
@@ -856,7 +928,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < Math.min(m.size(), appsLimit); i++) {
             final App a = m.get(i);
             String st1 = stateText(a);
-            TextView sv = text(st1, 14, true, appGroup(a) == 1 ? accent() : ink());
+            TextView sv = text(st1, 14, true, appGroup(a) == 1 || st1.startsWith("Compiling") || st1.equals("Queued") ? accent() : ink());
             sv.setGravity(Gravity.END);
             row(appsBox, a.label, a.pkg + (a.system ? "\nSystem app" : ""), sv).setOnClickListener(v -> appDialog(a));
         }
@@ -916,6 +988,7 @@ public class MainActivity extends Activity {
         c = group("Diagnostics");
         rowSwitch(c, "System logging", "Off for speed. Turn on to debug.", "logging", "0");
         c = group("App speed");
+        progressBlock(c);
         compileView = text(compileLabel(get("compile_status", "idle")), 15, true, accent());
         row(c, "Compile apps now", "Compiles installed apps for faster launches. Takes 10 to 15 minutes, runs in the background. SystemUI and the launcher restart when it finishes the first apps.", compileView)
             .setOnClickListener(v -> compile("compile_now"));

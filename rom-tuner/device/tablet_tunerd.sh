@@ -7,6 +7,7 @@ LOCK=/data/local/tmp/tuner.lock
 M=/system/product/media
 BLACK=org.lineageos.overlay.customization.blacktheme
 DXS=/system/bin/dexopt_all.sh; DXL=/data/local/tmp/dexopt.log; DXP=/data/local/tmp/dexopt.pid
+DXT=/data/local/tmp/dexopt.total; DXC=/data/local/tmp/dexopt.prog   # package count taken at run start; parsed progress of the log (cache)
 log() { echo "$(date +%T) $*" >> /data/local/tmp/tuner.log; }
 
 # ---------- app compile (one-shot, not stored state) ----------
@@ -21,7 +22,10 @@ compile() {   # $1 = "" skips apps that are already compiled, -f recompiles all;
   [ "$(cstat)" = running ] && { log "compile already running"; return; }
   [ -d $QL ] && { log "app compile running"; return; }
   [ -f $DXS ] || { log "no $DXS"; return; }
-  DEXOPT_FORCE=$1 nohup sh $DXS > $DXL 2>&1 < /dev/null &
+  rm -f $DXC $DXT; echo "=== run $(date +%s) ===" > $DXL   # the marker tells this run's lines from an older log; compile_started comes from it
+  # compile_total is an estimate: the installed packages, taken once. Apps without code are in it and apps named twice in the script count once.
+  ( trap - EXIT; n=$(pm list packages | wc -l); echo $((n + 0)) > $DXT ) < /dev/null > /dev/null 2>&1 &
+  DEXOPT_FORCE=$1 nohup sh $DXS >> $DXL 2>&1 < /dev/null &
   echo $! > $DXP; log "compile started ($1)"
 }
 
@@ -30,13 +34,11 @@ compile() {   # $1 = "" skips apps that are already compiled, -f recompiles all;
 # directory $QL. $RL is held while the state list is rebuilt. The app reads the list from files/apps_state ("package=filter" lines, the last line is
 # apps_state_time=<epoch> so a half written file can be told from a complete one).
 QF=/data/local/tmp/tuner.queue; QL=/data/local/tmp/tuner.q.lock; RL=/data/local/tmp/tuner.r.lock
-PST=/data/local/tmp/tuner.pkgstat; AFD=/data/local/tmp/tuner.apps; AFAIL=/data/local/tmp/tuner.apps.fail
+PST=/data/local/tmp/tuner.pkgstat; QC=/data/local/tmp/tuner.qcount; AFD=/data/local/tmp/tuner.apps; AFAIL=/data/local/tmp/tuner.apps.fail
 pkgok() { echo "$1" | grep -qE '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$'; }
 lock_wait() { while ! mkdir $LOCK 2>/dev/null; do sleep 0.3; done; }
 pub_locked() { lock_wait; load; publish; rmdir $LOCK; }   # for background jobs: publish writes the app's state file, so it must not overlap handle
 pubapps() {
-  echo "compile_pkg_status=$(cat $PST 2>/dev/null)"
-  echo "compile_queue=$(cut -d' ' -f2 $QF 2>/dev/null | tr '\n' ,)"
   echo "apps_state_time=$(sed -n 's/^apps_state_time=//p' $AFD 2>/dev/null)"
   echo "apps_refresh=$([ -d $RL ] && echo running || { [ -f $AFAIL ] && echo failed || echo idle; })"
 }
@@ -91,13 +93,14 @@ pkg_job() {   # $1 speed|speed-profile|reset, $2 package
   fi
   log "$1 $2 $qr: $(echo "$qo" | head -1)"
   apps_refresh "$2"
+  qs=; [ -f $QC ] && read -r qd qf qs < $QC; [ -n "$qs" ] && echo "$((qd + 1)) $((qf + $([ $qr = failed ] && echo 1 || echo 0))) $qs" > $QC   # jobs of this queue burst, for the progress keys
   echo "$2:$qr" > $PST
 }
 qworker() {   # one job at a time; the empty check and the flag reset happen under $LOCK, so a request that arrives meanwhile is never stranded
   while :; do
     lock_wait
     qj=$(sed -n 1p $QF 2>/dev/null)
-    if [ -z "$qj" ]; then rmdir $QL; rmdir $LOCK; break; fi
+    if [ -z "$qj" ]; then rm -f $QC; rmdir $QL; rmdir $LOCK; break; fi
     sed 1d $QF > $QF.t; mv $QF.t $QF; rmdir $LOCK
     set -- $qj; pkg_job "$1" "$2"
   done
@@ -108,7 +111,78 @@ pkg_enqueue() {   # $1 speed|speed-profile|reset, $2 package; called from handle
   pm path "$2" > /dev/null 2>&1 || { log "no package $2"; return; }
   grep -qx "$1 $2" $QF 2>/dev/null && return
   echo "$1 $2" >> $QF
-  if mkdir $QL 2>/dev/null; then ( trap - EXIT; qworker ) < /dev/null > /dev/null 2>&1 & fi
+  if mkdir $QL 2>/dev/null; then echo "0 0 $(date +%s)" > $QC; ( trap - EXIT; qworker ) < /dev/null > /dev/null 2>&1 & fi
+}
+
+# ---------- compile progress ----------
+# Bulk run: dexopt_all.sh prints "<package>" and then Success/Failure for its explicit lists, and "[<package>] Success|Failure" for the last step (-a),
+# and ends with DONE. The daemon writes "=== run <epoch> ===" first. A line without its newline is not counted (the writer is still on it).
+dxrun() {   # the newest run of the log: from the last marker on, the whole file when there is none
+  n=$(grep -n '^=== run ' $DXL 2>/dev/null | tail -n 1 | cut -d: -f1)
+  tail -n +${n:-1} $DXL 2>/dev/null
+}
+dxparse() {   # stdin: the run. Sets C_CUR (the package named last), C_KIND (compiling: no result yet; finished: it has one), C_DONE, C_FAIL, C_START, C_END
+  C_CUR=; C_KIND=; C_DONE=0; C_FAIL=0; C_START=; C_END=; seen=" "; dp=
+  while IFS= read -r dl; do
+    case $dl in
+      '=== run '*) C_START=${dl#=== run }; C_START=${C_START%% *}; case $C_START in ''|*[!0-9]*) C_START=;; esac;;
+      DONE) C_END=1;;
+      Success*|Failure*)   # the result of the package named above it (explicit lists)
+        [ -z "$dp" ] && continue
+        case $seen in *" $dp "*) ;; *) seen="$seen$dp "; C_DONE=$((C_DONE + 1)); case $dl in Failure*) C_FAIL=$((C_FAIL + 1));; esac;; esac
+        dp=; C_KIND=finished;;
+      \[*\]\ Success*|\[*\]\ Failure*)   # the -a step names the package in the result; one the lists already did is not counted again
+        pk=${dl#\[}; pk=${pk%%\]*}; C_CUR=$pk; C_KIND=finished; dp=
+        case $seen in *" $pk "*) ;; *) C_DONE=$((C_DONE + 1)); case ${dl#*\] } in Failure*) C_FAIL=$((C_FAIL + 1));; esac;; esac;;
+      ''|[!A-Za-z]*|*[!A-Za-z0-9_.]*|*..*|*.) ;;
+      *.*) C_CUR=$dl; dp=$dl; C_KIND=compiling;;
+    esac
+  done
+}
+dxprog() {   # sets the C_* values of $DXL; parses again only when the file size changed since the cached parse
+  sz=; [ -f $DXL ] && sz=$(wc -c < $DXL); sz=$((${sz:-0} + 0)); C_SZ=
+  [ -f $DXC ] && . $DXC
+  if [ "$C_SZ" != "$sz" ]; then
+    dxrun > $DXC.r; dxparse < $DXC.r; rm -f $DXC.r
+    [ -n "$C_END" ] && C_END=$(stat -c %Y $DXL 2>/dev/null || date +%s)
+    { for v in C_CUR C_KIND C_DONE C_FAIL C_START C_END; do eval echo $v=\$$v; done; echo C_SZ=$sz; } > $DXC.t && mv $DXC.t $DXC
+  fi
+}
+mmss() { printf '%d:%02d' $(($1 / 60)) $(($1 % 60)); }
+pubprog() {   # $1 = cstat. Progress keys of whatever is compiling; nothing when idle. A finished run leaves its summary.
+  if [ "$1" = running ]; then
+    dxprog; t=$(cat $DXT 2>/dev/null); t=$((${t:-0} + 0)); [ $t -gt 0 ] && [ $t -lt $C_DONE ] && t=$C_DONE   # 0: not counted yet
+    echo "compile_current=$C_CUR"; echo "compile_current_state=$C_KIND"; echo "compile_done=$C_DONE"; echo "compile_total=$t"
+    echo "compile_failed=$C_FAIL"; echo "compile_started=$C_START"
+  elif [ -d $QL ] && [ -f $QC ]; then   # the per app queue: jobs done, the running one and the waiting ones are all known
+    read -r qd qf qs < $QC; ps_=; [ -f $PST ] && read -r ps_ < $PST
+    qw=0; [ -f $QF ] && qw=$(wc -l < $QF); qw=$((qw + 0)); qr_=0; qc_=; case $ps_ in *:running) qc_=${ps_%:*}; qr_=1;; esac
+    echo "compile_current=$qc_"; echo "compile_current_state=$([ -n "$qc_" ] && echo compiling)"; echo "compile_done=$qd"
+    echo "compile_total=$((qd + qr_ + qw))"; echo "compile_failed=$qf"; echo "compile_started=$qs"
+  elif [ "$1" = done ]; then
+    dxprog
+    [ -n "$C_END" ] && echo "compile_summary=$C_DONE done, $C_FAIL failed$([ -n "$C_START" ] && echo " in $(mmss $((C_END - C_START)))")"
+  fi
+}
+pubcompile() (   # a subshell: the parsing helpers use plain globals
+  cs_=$(cstat)
+  echo "compile_status=$cs_"
+  echo "compile_pkg_status=$(cat $PST 2>/dev/null)"
+  echo "compile_queue=$(cut -d' ' -f2 $QF 2>/dev/null | tr '\n' ,)"
+  pubprog $cs_
+)
+# every 2 s from the daemon: while something compiles (and once more after it ends) only the compile_* lines of the app's state copy are rewritten, and
+# only when they changed. The full publish costs a few seconds of cmd calls, this one a few small file reads.
+PROG_SIG=; PROG_ON=
+prog_pub() {
+  { read -r pp_ < $DXP; } 2>/dev/null
+  pr_=; [ -n "$pp_" ] && kill -0 $pp_ 2>/dev/null && pr_=1; [ -d $QL ] && pr_=1
+  [ -z "$pr_" ] && [ -z "$PROG_ON" ] && return
+  pn_=$(pubcompile)
+  [ "$pn_" = "$PROG_SIG" ] && { PROG_ON=$pr_; return; }
+  mkdir $LOCK 2>/dev/null || return
+  [ -f $APP/state ] && { { grep -v '^compile_' $APP/state; echo "$pn_"; } > $S.pub; cat $S.pub > $APP/state; }
+  rmdir $LOCK; PROG_SIG=$pn_; PROG_ON=$pr_
 }
 
 # ---------- state ----------
@@ -157,7 +231,8 @@ putkey() { grep -v "^$1=" $S > $S.t; echo "$1=$2" >> $S.t; mv $S.t $S; }
 publish() {   # copy state (+ a status line) to the app; the file is pre-created with the app's owner/context
   [ -f $APP/state ] || return
   gpu_eff=0; [ "$gpu_freq" != 0 ] && [ "$perf_profile" != battery ] && gpu_eff=1
-  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; echo "compile_status=$(cstat)"; pubapps; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $APP/state
+  { cat $S; echo "profiles=$(cut -d"|" -f1 $PF 2>/dev/null | tr "\n" ,)"; echo "govs=$(tr ' ' , < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors)"; echo "gpu_opps=$(sed -n 's/.*freq = \([0-9]*\),.*/\1/p' /proc/gpufreq/gpufreq_opp_dump | tr '\n' ,)"; echo "io_scheds=$(tr -d '[]' < /sys/block/mmcblk0/queue/scheduler | tr ' ' ,)"; echo "tcps=$(tr ' ' , < /proc/sys/net/ipv4/tcp_available_congestion_control)"; echo "fonts=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$" | sed "s/.*font\\.//" | sort -u | tr "\\n" ,)"; ovl "icon\\.squircle" && echo has_shapes=1 || echo has_shapes=0; ovl "icon_pack\\.rounded\\.android" && echo has_packs=1 || echo has_packs=0; pubcompile; pubapps; echo "status=$perf_profile, GPU $([ "$gpu_eff" = 1 ] && echo locked $((gpu_freq/1000)) MHz || echo auto)"; } > $S.pub
+  cat $S.pub > $APP/state   # building takes seconds (cmd overlay list), so the app's file is written in one go and never read half empty
 }
 
 # ---------- appliers ----------
@@ -493,7 +568,7 @@ oc_watch() {   # every 2 s from the daemon
 
 # ---------- daemon ----------
 [ -n "$1" ] && { case $1 in *w*) [ "$3" = request ] && handle;; esac; exit 0; }
-rmdir $LOCK $QL $RL 2>/dev/null; rm -f $QF $PST $AFAIL
+rmdir $LOCK $QL $RL 2>/dev/null; rm -f $QF $PST $AFAIL $QC
 [ -f $S ] || seed
 until [ -d $(dirname $APP) ]; do sleep 2; done; mkdir -p $APP; chown $(stat -c %u $(dirname $APP)):$(stat -c %u $(dirname $APP)) $APP; chmod 771 $APP; restorecon $APP
 UID_=$(stat -c %u $APP)
@@ -534,9 +609,9 @@ enforce() {
 }
 # the compile run ends on its own, so tell the app when its status changes
 CS=
-cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; [ -d $LOCK ] && return; [ "$CS" = running ] && apps_refresh_bg; CS=$n; load; publish; }
+cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; mkdir $LOCK 2>/dev/null || return; [ "$CS" = running ] && apps_refresh_bg; CS=$n; load; publish; rmdir $LOCK; }
 ( while sleep 5; do enforce; cstat_pub; done ) &
 DSTART=$(date +%s)
-( while sleep 2; do oc_watch; done ) &
+( while sleep 2; do oc_watch; prog_pub; done ) &
 publish; log "daemon ready"
 exec inotifyd /system/bin/tablet_tunerd.sh $APP:nw   # toybox mask parsing is quirky: single letters are rejected, "wn" drops w
