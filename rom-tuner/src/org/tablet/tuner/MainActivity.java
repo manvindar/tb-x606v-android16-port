@@ -433,7 +433,7 @@ public class MainActivity extends Activity {
             FrameLayout fr = new FrameLayout(this);
             fr.addView(sv, new FrameLayout.LayoutParams(-1, -1));
             FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
-            fr.addView(saveBar(), bl);
+            fr.addView(saveBar(false), bl);
             rootView = fr; setContentView(fr);
         } else { rootView = sv; setContentView(sv); }
     }
@@ -524,17 +524,18 @@ public class MainActivity extends Activity {
         rightCol.setOrientation(LinearLayout.VERTICAL);
         rightCol.setPadding(px(Layouts.PANE_PAD), px(20), px(Layouts.PANE_PAD), px(128));
         rightSv.addView(rightCol, new FrameLayout.LayoutParams(-1, -2));
-        root.addView(rightSv, new LinearLayout.LayoutParams(0, -1, 1f));
+        final FrameLayout rightPane = new FrameLayout(this);
+        rightPane.addView(rightSv, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(rightPane, new LinearLayout.LayoutParams(0, -1, 1f));
         fillRight();
-        FrameLayout fr = new FrameLayout(this);
-        fr.addView(root, new FrameLayout.LayoutParams(-1, -1));
-        barView = saveBar();
+        barView = saveBar(true);
         FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
-        fr.addView(barView, bl);
+        rightPane.addView(barView, bl);
+        bl.setMargins(px(12), 0, px(12), px(10));
         barView.setVisibility("overview".equals(section) ? View.VISIBLE : View.GONE);
-        rootView = fr;
+        rootView = root;
         if (!query.isEmpty()) onQuery();
-        setContentView(fr);
+        setContentView(root);
     }
 
     /** id, title, summary of the section list, in order. */
@@ -803,7 +804,7 @@ public class MainActivity extends Activity {
         }
         sc.addView(vals);
         FrameLayout fl = new FrameLayout(this);
-        for (int i = 0; i < 3; i++) { ovG[i] = new LiveGraph(this); ovG[i].setHeightDp(190); }
+        for (int i = 0; i < 3; i++) { ovG[i] = new LiveGraph(this); ovG[i].setHeightDp(wide ? 120 : 190); }
         ovG[2].setup(new Hist[]{hTemp}, new int[]{warm}, 20, 90, new float[0], 85, rule, 0xAAFF5A4C, true);
         ovG[0].setup(new Hist[]{hFast, hSlow}, new int[]{fastC, slowC}, 0, cpuMaxGhz, cpuRules, -1, rule, 0, false);
         ovG[1].setup(new Hist[]{hGpu}, new int[]{gpuC}, 300, 900, new float[0], -1, rule, 0, false);
@@ -841,17 +842,18 @@ public class MainActivity extends Activity {
         final HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         LinearLayout row = new LinearLayout(this);
+        row.setBaselineAligned(false);
         String[] meterNames = {"Speed", "Battery", "Heat"};
         final int shownIdx = idx < 0 ? PRESETS.length : idx;   // the Custom card is the sixth
         for (int i = 0; i <= PRESETS.length; i++) {
             final int n = i; boolean sel = i == shownIdx, custom = i == PRESETS.length;
             LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL);
-            c.setPadding(px(20), px(18), px(20), px(18));
+            c.setPadding(px(wide ? 16 : 20), px(wide ? 14 : 18), px(wide ? 16 : 20), px(wide ? 14 : 18));
             GradientDrawable g = new GradientDrawable(); g.setColor(sel ? priC() : card()); g.setCornerRadius(px(28));
             c.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ripple()), g, null));
             int fg = sel ? onPriC() : ink(), fg2 = sel ? onPriC() : dim();
             LinearLayout top = new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL);
-            top.addView(new GlyphView(this, custom ? "custom" : "m" + i, sel ? onAccent() : fg2, sel ? accent() : line()), new LinearLayout.LayoutParams(px(44), px(44)));
+            top.addView(new GlyphView(this, custom ? "custom" : "m" + i, sel ? onAccent() : fg2, sel ? accent() : line()), new LinearLayout.LayoutParams(px(wide ? 38 : 44), px(wide ? 38 : 44)));
             View sp = new View(this); top.addView(sp, new LinearLayout.LayoutParams(0, 1, 1f));
             if (sel) {
                 TextView chip = text("✓ In use", 12, true, onAccent());
@@ -860,9 +862,9 @@ public class MainActivity extends Activity {
             }
             c.addView(top, new LinearLayout.LayoutParams(-1, -2));
             String ap = get("profile_active", ""), pb = get("profile_base", "");
-            TextView nm = text(custom ? "Custom" : PRESETS[i][1], 22, true, fg); nm.setPadding(0, px(12), 0, 0); c.addView(nm);
+            TextView nm = text(custom ? "Custom" : PRESETS[i][1], wide ? 19 : 22, true, fg); nm.setPadding(0, px(wide ? 8 : 12), 0, 0); c.addView(nm);
             String desc = custom ? (!ap.isEmpty() ? "Profile \u201c" + Profiles.shown(ap) + "\u201d is in use." : !pb.isEmpty() ? "Based on \u201c" + Profiles.shown(pb) + "\u201d, changed." : "Your own settings and your saved profiles.") : PRESETS[i][2];
-            TextView ds = text(desc, 13, false, fg2); ds.setMinLines(4); ds.setPadding(0, px(4), 0, px(10)); c.addView(ds);
+            TextView ds = text(desc, wide ? 12.5f : 13, false, fg2); ds.setMinLines(wide ? 3 : 4); ds.setPadding(0, px(4), 0, px(wide ? 6 : 10)); c.addView(ds);
             if (custom) {
                 String[] ps = get("profiles", "").split(","); int cnt = 0; for (String q : ps) if (!q.isEmpty()) cnt++;
                 LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
@@ -875,7 +877,7 @@ public class MainActivity extends Activity {
                     View seg = new View(this); GradientDrawable sg = new GradientDrawable(); sg.setCornerRadius(px(3));
                     sg.setColor(k < METERS[i][m] ? (m == 2 ? 0xFFFF8A4C : (sel ? onPriC() : accent())) : (sel ? (onPriC() & 0xFFFFFF) | 0x44000000 : line()));
                     seg.setBackground(sg);
-                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(16), px(6)); sl.setMargins(px(3), 0, 0, 0);
+                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(wide ? 18 : 16), px(6)); sl.setMargins(px(3), 0, 0, 0);
                     mr.addView(seg, sl);
                 }
                 LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
@@ -883,9 +885,16 @@ public class MainActivity extends Activity {
             }
             c.setOnClickListener(v -> { if (custom) showProfilesSheet(); else if (n != idx) { set("preset", PRESETS[n][0]); build(); } });
             c.setContentDescription((custom ? "Custom. " + desc : PRESETS[i][1] + ". " + PRESETS[i][2]) + (sel ? " In use." : ""));
+            if (wide) {   // three across, two rows: all six visible without scrolling
+                LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(0, -1, 1f); wl.setMargins(i % 3 == 0 ? 0 : px(5), 0, i % 3 == 2 ? 0 : px(5), 0);
+                if (i % 3 == 0) { row = new LinearLayout(this); row.setBaselineAligned(false); LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2); rl.setMargins(0, i == 0 ? 0 : px(10), 0, 0); col.addView(row, rl); }
+                row.addView(c, wl);
+                continue;
+            }
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(220), -2); lp.setMargins(0, 0, px(10), 0);
             row.addView(c, lp);
         }
+        if (wide) return;
         hs.addView(row);
         col.addView(hs, new LinearLayout.LayoutParams(-1, -2));
         if (shownIdx > 1) hs.post(() -> hs.scrollTo(Math.max(0, (shownIdx - 1) * px(230)), 0));
@@ -923,9 +932,9 @@ public class MainActivity extends Activity {
     }
 
     /** The bar under the overview: what is in use, and one button to keep it as a profile. */
-    private View saveBar() {
+    private View saveBar(boolean floating) {
         LinearLayout bar = new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable g = new GradientDrawable(); g.setColor(sys(android.R.color.system_neutral1_800, android.R.color.system_neutral1_50)); g.setCornerRadii(new float[]{px(28), px(28), px(28), px(28), 0, 0, 0, 0});
+        GradientDrawable g = new GradientDrawable(); g.setColor(sys(android.R.color.system_neutral1_800, android.R.color.system_neutral1_50)); g.setCornerRadii(new float[]{px(28), px(28), px(28), px(28), floating ? px(28) : 0, floating ? px(28) : 0, floating ? px(28) : 0, floating ? px(28) : 0});
         bar.setBackground(g); bar.setElevation(px(8));
         bar.setPadding(px(24), px(14), px(20), px(14));
         String ap = get("profile_active", ""), pb = get("profile_base", ""), cur = get("preset", "balanced"), t, sub;
