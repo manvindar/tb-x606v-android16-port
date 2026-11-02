@@ -236,6 +236,10 @@ The home screen and the section list are grouped by task: Speed (performance det
 
 The search index is not a hand written list: the first search builds every page (except the app list) into a scratch column and records each row, so it follows the pages as they change. The matching and ranking are in `src/org/tablet/tuner/Search.java`, tested by `tests/SearchTest.java` (run by `sh tests/test_apps.sh`). Rows within a card are now separated by a 2 dp gap in the page colour instead of a hairline, and the cards and titles are a little larger.
 
+### Look (Material 3)
+
+Lists are segmented: each setting is its own tile on a `surface container` tone, with large (28 dp) corners on the outside of a group and small (6 dp) corners between tiles, 2 dp apart, and a ripple on press. In two panes the selected section is a secondary container tile. The preset dial, its name and the clocks sit in one hero card. Colours are the system palette (`system_accent*`, `system_neutral*`), so they follow the wallpaper and light or dark mode. The search box and the Graphs and State tabs are fully rounded; the back button is a 48 dp circle. Row descriptions are 14 sp.
+
 ### Live page and the clocks in the dial
 
 The half ring of the preset dial shows the current readings inside it: CPU clocks (fast and slow cores) large, then GPU clock, chip temperature and free RAM. They update once a second. The separate readout card is gone from the home screen and from the left pane.

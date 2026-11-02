@@ -78,7 +78,8 @@ final class DialView extends View {
             float off = dp(i == selected ? 26 : 22);
             float tx = d.x + (float) Math.cos(a) * off, ty = d.y - (float) Math.sin(a) * off + dp(5);
             p.setTextAlign(i == 0 ? Paint.Align.CENTER : i == n - 1 ? Paint.Align.CENTER : Paint.Align.CENTER);
-            c.drawText(labels[i], tx, i == 0 || i == n - 1 ? CY + dp(26) : ty, p);
+            float half = p.measureText(labels[i]) / 2 + dp(4);   // keep the name inside the view
+            c.drawText(labels[i], Math.max(half, Math.min(getWidth() - half, tx)), i == 0 || i == n - 1 ? CY + dp(26) : ty, p);
         }
         drawLive(c, R, CX, CY);
         if (selected >= 0 || dragPos >= 0) {
@@ -94,16 +95,18 @@ final class DialView extends View {
         float k = Math.max(0.5f, Math.min(1f, R / dp(250)));
         p.setStyle(Paint.Style.FILL); p.setTextAlign(Paint.Align.CENTER);
         p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        p.setColor(ink); p.setTextSize(dp(22 + 18 * k));
-        c.drawText(liveVals[0], CX, CY - 0.58f * R, p);
+        boolean compact = R < dp(200);
+        float by = CY - (compact ? 0.52f : 0.58f) * R, gap = dp(compact ? 14 : 18);
+        p.setColor(ink); p.setTextSize(dp(compact ? 27 : 40));
+        c.drawText(liveVals[0], CX, by, p);
         p.setColor(dim); p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL)); p.setTextSize(dp(11 + 2 * k));
-        c.drawText(liveLabs[0], CX, CY - 0.58f * R + dp(18), p);
+        c.drawText(liveLabs[0], CX, by + gap, p);
         for (int i = 1; i <= 2; i++) {
-            float x = CX + (i == 1 ? -0.36f : 0.36f) * R, y = CY - 0.2f * R;
+            float x = CX + (i == 1 ? -0.36f : 0.36f) * R, y = CY - (compact ? 0.1f : 0.2f) * R;
             p.setColor(ink); p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); p.setTextSize(dp(15 + 6 * k));
             c.drawText(liveVals[i], x, y, p);
             p.setColor(dim); p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL)); p.setTextSize(dp(11 + 2 * k));
-            c.drawText(liveLabs[i], x, y + dp(18), p);
+            c.drawText(liveLabs[i], x, y + gap, p);
         }
         p.setColor(dim); p.setTextSize(dp(11 + 2 * k));
         c.drawText(liveVals[3], CX, CY + dp(16), p);

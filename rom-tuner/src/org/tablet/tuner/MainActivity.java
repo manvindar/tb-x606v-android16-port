@@ -139,8 +139,47 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    /** A rounded card that rows go into. */
+    private int secContainer() { return sys(android.R.color.system_accent2_700, android.R.color.system_accent2_100); }
+    private int onSecContainer() { return sys(android.R.color.system_accent2_100, android.R.color.system_accent2_900); }
+    private int ripple() { return (ink() & 0xFFFFFF) | 0x1F000000; }
+
+    /** Corner radii of each tile (px), so a tile can be painted again (selected, flashed) with the same shape. */
+    private final java.util.WeakHashMap<View, float[]> radii = new java.util.WeakHashMap<>();
+
+    private void paintTile(View v, int fill) {
+        float[] r = radii.get(v);
+        if (r == null) return;
+        GradientDrawable g = new GradientDrawable(); g.setColor(fill); g.setCornerRadii(r);
+        GradientDrawable m = new GradientDrawable(); m.setColor(0xFF000000); m.setCornerRadii(r);
+        v.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ripple()), g, m));
+    }
+
+    /** A segmented list: every child is its own tile, large corners on the outside of the group and small ones between tiles, 2 dp apart. */
+    private void restyle(LinearLayout c) {
+        int n = c.getChildCount();
+        float big = px(28), small = px(6);
+        for (int i = 0; i < n; i++) {
+            View v = c.getChildAt(i);
+            float t = i == 0 ? big : small, b = i == n - 1 ? big : small;
+            radii.put(v, new float[]{t, t, t, t, b, b, b, b});
+            paintTile(v, v.isSelected() ? secContainer() : card());
+            if (v.getLayoutParams() instanceof LinearLayout.LayoutParams) ((LinearLayout.LayoutParams) v.getLayoutParams()).topMargin = i == 0 ? 0 : px(2);
+        }
+    }
+
+    /** A segmented list that rows go into. */
     private LinearLayout newCard() {
+        final LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
+            @Override public void onChildViewAdded(View parent, View child) { restyle(c); }
+            @Override public void onChildViewRemoved(View parent, View child) { restyle(c); }
+        });
+        return c;
+    }
+
+    /** One rounded surface for content that is not a list of rows (a chart, the dial). */
+    private LinearLayout plainCard() {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable g = new GradientDrawable();
@@ -155,7 +194,7 @@ public class MainActivity extends Activity {
         LinearLayout host = cols > 1 ? shorterColumn() : col;
         if (title != null) {
             TextView t = text(title, 14, true, accent());
-            t.setPadding(px(10), px(22), 0, px(8));
+            t.setPadding(px(20), px(24), 0, px(8));
             host.addView(t);
         } else {
             View gap = new View(this); host.addView(gap, new LinearLayout.LayoutParams(-1, px(14)));
@@ -202,7 +241,6 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout row(LinearLayout c, String title, String sub, View control) {
-        if (c.getChildCount() > 0) divider(c);
         LinearLayout r = new LinearLayout(this);
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setGravity(Gravity.CENTER_VERTICAL);
@@ -213,7 +251,7 @@ public class MainActivity extends Activity {
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.addView(text(title, 16, false, ink()));
-        if (sub != null) { TextView s = text(sub, 13, false, dim()); s.setPadding(0, px(2), px(12), 0); texts.addView(s); }
+        if (sub != null) { TextView s = text(sub, 14, false, dim()); s.setPadding(0, px(2), px(12), 0); texts.addView(s); }
         r.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
         if (control != null) r.addView(control);
         c.addView(r, new LinearLayout.LayoutParams(-1, -2));
@@ -251,9 +289,17 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar s) { }
             @Override public void onStopTrackingTouch(SeekBar s) { set(key, String.valueOf(s.getProgress())); }
         });
-        row(c, title, sub, val);
+        sliderTile(c, row(c, title, sub, val), sb);
+    }
+
+    /** The row and its bar make one tile. */
+    private void sliderTile(LinearLayout c, View r, SeekBar sb) {
+        c.removeView(r);
+        LinearLayout w = new LinearLayout(this); w.setOrientation(LinearLayout.VERTICAL);
+        w.addView(r, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(px(14), 0, px(14), px(10));
-        c.addView(sb, lp);
+        w.addView(sb, lp);
+        c.addView(w, new LinearLayout.LayoutParams(-1, -2));
     }
     private String label(String[] fmt, int p) { return fmt != null && p < fmt.length ? fmt[p] : String.valueOf(p); }
 
@@ -348,10 +394,13 @@ public class MainActivity extends Activity {
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setPadding(px(6), px(4), px(6), px(4));
         if (!HOME.equals(page)) {
-            TextView back = text("‹", 34, false, accent());
-            back.setPadding(0, 0, px(14), px(4));
+            TextView back = text("‹", 30, false, ink());
+            back.setGravity(Gravity.CENTER); back.setIncludeFontPadding(false);
+            GradientDrawable bg = new GradientDrawable(); bg.setShape(GradientDrawable.OVAL); bg.setColor(card()); back.setBackground(bg);
+            back.setContentDescription("Back");
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(px(48), px(48)); bl.setMargins(0, 0, px(14), 0);
             back.setOnClickListener(v -> go(parentPage()));
-            head.addView(back);
+            head.addView(back, bl);
         }
         head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(page), HOME.equals(page) ? 34 : 30, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
         status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
@@ -489,8 +538,7 @@ public class MainActivity extends Activity {
     }
     private void markEntry(View r, boolean on) {
         r.setSelected(on);
-        if (on) { GradientDrawable g = new GradientDrawable(); g.setColor((accent() & 0xFFFFFF) | 0x33000000); g.setCornerRadius(px(20)); r.setBackground(g); }
-        else r.setBackground(null);
+        paintTile(r, on ? secContainer() : card());
     }
 
     /** Swaps the right pane with a short crossfade (none when animations are off). The selection is remembered in section. */
@@ -527,7 +575,7 @@ public class MainActivity extends Activity {
     private View searchBar() {
         LinearLayout w = new LinearLayout(this);
         w.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(28));
+        GradientDrawable g = new GradientDrawable(); g.setColor(line()); g.setCornerRadius(px(28));
         w.setBackground(g);
         w.setPadding(px(20), 0, px(6), 0);
         final EditText e = new EditText(this);
@@ -640,9 +688,8 @@ public class MainActivity extends Activity {
             int y = 0; View c = v;
             while (c != null && c != sv) { y += c.getTop(); c = c.getParent() instanceof View ? (View) c.getParent() : null; }
             sv.scrollTo(0, Math.max(0, y - px(140)));
-            GradientDrawable g = new GradientDrawable(); g.setColor((accent() & 0xFFFFFF) | 0x44000000); g.setCornerRadius(px(20));
-            v.setBackground(g);
-            ui.postDelayed(() -> v.setBackground(null), 1600);
+            paintTile(v, secContainer());
+            ui.postDelayed(() -> paintTile(v, card()), 1600);
         });
     }
     private static View findTag(View v, String t) {
@@ -729,7 +776,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout chartCard(String title, LiveGraph g, TextView[] values, int[] colors) {
-        LinearLayout c = newCard();
+        LinearLayout c = plainCard();
         c.setPadding(px(20), px(14), px(20), px(10));
         LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
         head.addView(text(title, 15, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
@@ -810,8 +857,8 @@ public class MainActivity extends Activity {
             stateBox.setVisibility(liveTab == 1 ? View.VISIBLE : View.GONE);
             for (int i = 0; i < 2; i++) {
                 TextView t = i == 0 ? t0 : t1; boolean on = i == liveTab;
-                GradientDrawable g = new GradientDrawable(); g.setColor(on ? accent() : 0); g.setCornerRadius(px(24)); t.setBackground(g);
-                t.setTextColor(on ? onAccent() : dim());
+                GradientDrawable g = new GradientDrawable(); g.setColor(on ? secContainer() : 0); g.setCornerRadius(px(24)); t.setBackground(g);
+                t.setTextColor(on ? onSecContainer() : dim());
             }
         };
         t0.setOnClickListener(v -> { liveTab = 0; show.run(); });
@@ -971,22 +1018,26 @@ public class MainActivity extends Activity {
         int idx = -1;
         String[] names = new String[PRESETS.length];
         for (int i = 0; i < PRESETS.length; i++) { names[i] = PRESETS[i][1]; if (PRESETS[i][0].equals(cur)) idx = i; }
+        LinearLayout hero = plainCard();
+        hero.setPadding(px(8), px(10), px(8), px(10));
         DialView d = new DialView(this);
-        d.setColors(accent(), line(), ink(), dim(), onAccent(), 0xFFFF8A4C);
+        d.setColors(accent(), sys(android.R.color.system_neutral2_600, android.R.color.system_neutral2_300), ink(), dim(), onAccent(), 0xFFFF8A4C);
         d.setItems(names);
         if (compact) d.setMaxRadius(130);
         d.setSelected(idx);
         d.setOnPick(i -> { set("preset", PRESETS[i][0]); build(); });
         liveDial = d; refreshDial();
-        col.addView(d, new LinearLayout.LayoutParams(-1, -2));
+        hero.addView(d, new LinearLayout.LayoutParams(-1, -2));
         String ap = get("profile_active", "");
         TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), compact ? 28 : 34, true, ink());
         name.setGravity(Gravity.CENTER); name.setPadding(0, px(compact ? 4 : 8), 0, px(4));
-        col.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        hero.addView(name, new LinearLayout.LayoutParams(-1, -2));
         boolean upd = idx < 0 && canUpdateProfile();
         TextView desc = text(idx >= 0 ? PRESETS[idx][2] : upd ? "Based on " + Profiles.shown(get("profile_base", "")) + ", changed. Save the changes or pick a preset." : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile" + (compact ? "." : " below.") : "Your saved profile. Pick a preset on the dial to leave it.", compact ? 14 : 15, false, dim());
         desc.setGravity(Gravity.CENTER); desc.setPadding(px(compact ? 8 : 24), 0, px(compact ? 8 : 24), px(compact ? 12 : 10));
-        col.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+        hero.addView(desc, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2); hp.setMargins(0, px(10), 0, px(4));
+        col.addView(hero, hp);
         if (canUpdateProfile()) updateProfileRow(group(null));
     }
 
@@ -1312,9 +1363,7 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar s) { }
             @Override public void onStopTrackingTouch(SeekBar s) { set("anim_scale", String.format(Locale.US, "%.1f", s.getProgress() / 10f)); }
         });
-        row(c, "Animation speed", "Lower is faster. 0.5x makes everything feel quicker.", av);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(px(14), 0, px(14), px(10));
-        c.addView(sb, lp);
+        sliderTile(c, row(c, "Animation speed", "Lower is faster. 0.5x makes everything feel quicker.", av), sb);
         rowSwitch(c, "Turn off window blur", "Cheaper to draw, which makes launcher and shade smoother", "window_blur", "0");
         c = group("Screen");
         rowChoice(c, "Display size", "Smaller shows more content", "density",
