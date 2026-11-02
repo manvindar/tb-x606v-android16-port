@@ -44,6 +44,9 @@ DXS=$T/dexopt_all.sh; DXL=$T/dexopt.log; DXP=$T/dexopt.pid; DXT=$T/dexopt.total;
 
 ok "parse: first status per package, no code skipped" "$(cmd package art dump | dexstates | tr '\n' ' ')" "com.example.one=speed-profile com.example.two=verify com.example.three=run-from-apk "
 ok "parse: indented header (dumpsys form)" "$(cmd package art dump | sed 's/^/  /' | dexstates | head -1)" "com.example.one=speed-profile"
+ok "parse: 64-bit status wins over the 32-bit one" "$(printf '[com.w]\n  path: /a.apk\n    arm: [status=verify] [reason=first-boot]\n    arm64: [status=speed] [reason=cmdline]\n' | dexstates)" "com.w=speed"
+ok "parse: 32-bit only" "$(printf '[com.o]\n  path: /a.apk\n    arm: [status=speed]\n' | dexstates)" "com.o=speed"
+ok "parse: secondary dex ignored" "$(printf '[com.s]\n  path: /a.apk\n  known secondary dex files:\n    /x/pcam.jar\n      arm64: [status=verify]\n[com.t]\n  path: /b.apk\n    arm64: [status=speed]\n' | dexstates | tr '\n' ' ')" "com.t=speed "
 ok "parse: empty input" "$(echo 'Unknown command: art' | dexstates)" ""
 pkgok com.example.one && r=yes || r=no; ok "name ok" $r yes
 for n in com.x\;reboot -rf a com..x .com.x com.x. 1abc.def 'a b.c' ''; do pkgok "$n" && r=yes || r=no; ok "name rejected [$n]" $r no; done

@@ -46,6 +46,10 @@ final class GlyphView extends View {
                 Path b = new Path(); b.moveTo(cx + u * 0.25f, cy - u); b.lineTo(cx - u * 0.55f, cy + u * 0.15f); b.lineTo(cx - u * 0.05f, cy + u * 0.15f); b.lineTo(cx - u * 0.25f, cy + u); b.lineTo(cx + u * 0.55f, cy - u * 0.15f); b.lineTo(cx + u * 0.05f, cy - u * 0.15f); b.close();
                 p.setStyle(Paint.Style.FILL); c.drawPath(b, p); break;
             }
+            case "home": {   // house
+                p.setStyle(Paint.Style.STROKE);
+                Path h = new Path(); h.moveTo(cx - u, cy); h.lineTo(cx, cy - u * 0.9f); h.lineTo(cx + u, cy); h.moveTo(cx - u * 0.7f, cy - u * 0.2f); h.lineTo(cx - u * 0.7f, cy + u * 0.85f); h.lineTo(cx + u * 0.7f, cy + u * 0.85f); h.lineTo(cx + u * 0.7f, cy - u * 0.2f); c.drawPath(h, p); break;
+            }
             case "apps": {   // four squares
                 p.setStyle(Paint.Style.FILL); float g = u * 0.12f;
                 c.drawRoundRect(cx - u, cy - u, cx - g, cy - g, 4, 4, p); c.drawRoundRect(cx + g, cy - u, cx + u, cy - g, 4, 4, p);

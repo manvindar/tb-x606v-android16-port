@@ -245,6 +245,14 @@ The home screen is the Overview. Top to bottom: the search box, a live graph of 
 - Picture edits wait for Apply. A preview shows the wallpaper in two halves: the left as the display looks now, the right with the extra contrast and saturation the pending sliders would add (an estimate, `PicMath.java`; gamma and sharpness are not shown). The daemon copies the wallpaper to `files/preview.jpg` on the `preview_photo` request, because the app cannot read the system's wallpaper file; until then a drawn scene is used.
 - A value changed in the app is kept for 12 seconds over the published state (`Pending.java`). Before, a read 2.5 seconds after a change brought back the old number, because the picture engine needs about 4 seconds to restart and publish.
 
+### Layout
+
+A screen at least 760 dp wide (the tablet in portrait is 800 dp, in landscape 1280 dp) gets the rail layout in both orientations: a narrow rail of section icons on the left, and on the right a header (section name, status, search box) over the section. Narrower screens (phones) keep the single column with the Fine tune grid. In the Overview the six mode cards sit in one row when the right pane is at least 1000 dp wide (landscape) and in two rows of three otherwise. The save bar floats over the right pane and is not there when the profile in use matches the settings.
+
+### App speed list
+
+The state of each app comes from `cmd package art dump`. Three fixes: the 64-bit status of the base apk is used (the 32-bit line of webview stayed `verify` and showed it as not compiled); packages the dump has no entry for (overlays, resource packages) show as No code instead of Not compiled; and the cleanup that removes stale copies in `/data/dalvik-cache` (`fixpkg`, and `fixcache` in `dexopt_all.sh`) no longer touches `/vendor`. The vendor image still carries Android 10 odex files that this ART rejects, so the cleanup took them for good copies and deleted the fresh compile of apps such as EmCamera, which then fell back to run-from-apk and showed Not compiled again after every run.
+
 ### Look (Material 3)
 
 Lists are segmented: each setting is its own tile on a `surface container` tone, with large (28 dp) corners on the outside of a group and small (6 dp) corners between tiles, 2 dp apart, and a ripple on press. In two panes the selected section is a secondary container tile. The preset dial, its name and the clocks sit in one hero card. Colours are the system palette (`system_accent*`, `system_neutral*`), so they follow the wallpaper and light or dark mode. The search box and the Graphs and State tabs are fully rounded; the back button is a 48 dp circle. Row descriptions are 14 sp.

@@ -45,14 +45,19 @@ pubapps() {
 # stdin: "art dump" text ("[com.x]" header, then "path:" blocks with "arm64: [status=speed] ..."). Prints "package=filter" with the first status of each package
 # (the base apk). The header may be indented (dumpsys package dexopt nests it under "Dexopt state:").
 dexstates() {
-  sed -n -e 's/^ *\[\([A-Za-z][A-Za-z0-9_.]*\)\] *$/P \1/p' -e 's/.*\[status=\([A-Za-z0-9_-]*\)\].*/S \1/p' | {
-    pk=; got=1
+  # the 64-bit status of the base apk wins over the 32-bit one (webview lists arm first and it stays verify); statuses after "known secondary dex files:" are ignored
+  sed -n -e 's/^ *\[\([A-Za-z][A-Za-z0-9_.]*\)\] *$/P \1/p' -e 's/^ *known secondary dex files:.*/X x/p' -e 's/^ *arm64: \[status=\([A-Za-z0-9_-]*\)\].*/A \1/p' -e 's/^ *arm: \[status=\([A-Za-z0-9_-]*\)\].*/S \1/p' | {
+    pk=; a=; s=; x=
+    emit() { [ -n "$pk" ] || return 0; if [ -n "$a" ]; then echo "$pk=$a"; elif [ -n "$s" ]; then echo "$pk=$s"; fi; }
     while read t v; do
       case $t in
-        P) pk=$v; got=;;
-        S) [ -z "$got" ] && [ -n "$pk" ] && { echo "$pk=$v"; got=1; };;
+        P) emit; pk=$v; a=; s=; x=;;
+        X) x=1;;
+        A) [ -z "$x" ] && [ -z "$a" ] && a=$v;;
+        S) [ -z "$x" ] && [ -z "$s" ] && s=$v;;
       esac
     done
+    emit
   }
 }
 apps_refresh() {   # $1 empty: read every package (takes seconds); $1 package: read that one and replace its line. Run in the background only.
@@ -73,7 +78,7 @@ apps_refresh() {   # $1 empty: read every package (takes seconds); $1 package: r
 apps_refresh_bg() { ( trap - EXIT; apps_refresh "$1" ) < /dev/null > /dev/null 2>&1 & }
 fixpkg() {   # the same stale copy cleanup as fixcache in dexopt_all.sh, for one package
   pm path "$1" | sed 's/^package://' | while read qk; do
-    case $qk in /system/*|/product/*|/system_ext/*|/vendor/*) ;; *) continue;; esac
+    case $qk in /system/*|/product/*|/system_ext/*) ;; *) continue;; esac   # not /vendor: its old odex is rejected by this ART, the dalvik-cache copy is the real one
     qd=${qk%/*}; qb=${qk##*/}; qb=${qb%.apk}
     [ -f "$qd/oat/arm64/$qb.odex" ] || continue
     rm -f /data/dalvik-cache/arm64/$(echo "${qk#/}" | sed 's|/|@|g')@classes.*

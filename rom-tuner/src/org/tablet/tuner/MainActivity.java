@@ -398,7 +398,7 @@ public class MainActivity extends Activity {
         outer.setGravity(Gravity.CENTER_HORIZONTAL);
         col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(px(16), px(20), px(16), px(HOME.equals(page) ? 128 : 48));
+        col.setPadding(px(16), px(20), px(16), px(HOME.equals(page) && barWanted() ? 128 : 48));
         outer.addView(col, new LinearLayout.LayoutParams(Math.min(px(680), getResources().getDisplayMetrics().widthPixels), -2));
         sv.addView(outer);
 
@@ -429,7 +429,7 @@ public class MainActivity extends Activity {
             LinearLayout host = col; col = homeBody; pageHome(); col = host;
             onQuery();
         } else buildPage(page);
-        if (HOME.equals(page)) {
+        if (HOME.equals(page) && barWanted()) {
             FrameLayout fr = new FrameLayout(this);
             fr.addView(sv, new FrameLayout.LayoutParams(-1, -1));
             FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
@@ -474,8 +474,11 @@ public class MainActivity extends Activity {
     }
 
     // ---------- two panes: the preset dial, live card and section list on the left, the chosen section on the right ----------
+    private TextView titleView;
+
+    /** Two panes: a rail of icons on the left, the section on the right under a header with its name, the status and the search box. */
     private void buildWide(int wDp, int hDp) {
-        if (!entryIds().contains(section)) section = "perf";
+        if (!entryIds().contains(section)) section = "overview";
         int contentDp = Layouts.contentWidth(wDp);
         int settingCols = Layouts.settingColumns(contentDp);
         appsCols = Layouts.appColumns(contentDp);
@@ -484,58 +487,68 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setBackgroundColor(surface());
 
-        // left: header (title, dial, live card) and the section list
-        LinearLayout header = new LinearLayout(this); header.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(px(16), px(16), px(16), px(4));
-        list.setPadding(px(16), 0, px(16), px(32));
-        col = header; cols = 1;
-        LinearLayout head = new LinearLayout(this);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        head.setPadding(px(6), 0, px(6), px(4));
-        head.addView(text("ROM Tuner", 28, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
-        status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
-        status.setMaxWidth(px(150)); status.setGravity(Gravity.END);
-        head.addView(status);
-        header.addView(head);
-        header.addView(searchBar(), searchLp());
-        col = list;
-        sectionEntries();
-        LinearLayout left = new LinearLayout(this);
-        left.setOrientation(LinearLayout.VERTICAL);
-        if (Layouts.pinHeader(hDp)) {
-            left.addView(header, new LinearLayout.LayoutParams(-1, -2));
-            leftSv = new ScrollView(this); leftSv.addView(list);
-            left.addView(leftSv, new LinearLayout.LayoutParams(-1, 0, 1f));
-        } else {
-            LinearLayout both = new LinearLayout(this); both.setOrientation(LinearLayout.VERTICAL);
-            both.addView(header); both.addView(list);
-            leftSv = new ScrollView(this); leftSv.addView(both);
-            left.addView(leftSv, new LinearLayout.LayoutParams(-1, -1));
-        }
-        root.addView(left, new LinearLayout.LayoutParams(px(Layouts.leftWidth(wDp)), -1));
+        // left: the rail
+        LinearLayout rail = new LinearLayout(this); rail.setOrientation(LinearLayout.VERTICAL);
+        rail.setPadding(0, px(14), 0, px(14));
+        for (String[] e : entries()) if (!e[0].equals("profiles")) rail.addView(railItem(e[0]), new LinearLayout.LayoutParams(-1, -2));
+        leftSv = new ScrollView(this); leftSv.setVerticalScrollBarEnabled(false); leftSv.addView(rail);
+        root.addView(leftSv, new LinearLayout.LayoutParams(px(Layouts.leftWidth(wDp)), -1));
         View rule = new View(this); rule.setBackgroundColor(line());
         root.addView(rule, new LinearLayout.LayoutParams(1, -1));
 
-        // right: the selected section
+        // right: header, then the selected section
         cols = settingCols;
         rightSv = new ScrollView(this);
         rightCol = new LinearLayout(this);
         rightCol.setOrientation(LinearLayout.VERTICAL);
-        rightCol.setPadding(px(Layouts.PANE_PAD), px(20), px(Layouts.PANE_PAD), px(128));
+        rightCol.setPadding(px(Layouts.PANE_PAD), px(8), px(Layouts.PANE_PAD), px(barWanted() ? 128 : 48));
         rightSv.addView(rightCol, new FrameLayout.LayoutParams(-1, -2));
+        LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(px(Layouts.PANE_PAD), px(14), px(Layouts.PANE_PAD), px(4));
+        titleView = text("", 30, true, ink());
+        head.addView(titleView, new LinearLayout.LayoutParams(0, -2, 1f));
+        status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
+        status.setMaxWidth(px(180)); status.setGravity(Gravity.END);
+        head.addView(status);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(360), -2); sl.setMargins(px(16), 0, 0, 0);
+        head.addView(searchBar(), sl);
+        LinearLayout rightBox = new LinearLayout(this); rightBox.setOrientation(LinearLayout.VERTICAL);
+        rightBox.addView(head, new LinearLayout.LayoutParams(-1, -2));
+        rightBox.addView(rightSv, new LinearLayout.LayoutParams(-1, 0, 1f));
         final FrameLayout rightPane = new FrameLayout(this);
-        rightPane.addView(rightSv, new FrameLayout.LayoutParams(-1, -1));
+        rightPane.addView(rightBox, new FrameLayout.LayoutParams(-1, -1));
         root.addView(rightPane, new LinearLayout.LayoutParams(0, -1, 1f));
         fillRight();
-        barView = saveBar(true);
-        FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
-        rightPane.addView(barView, bl);
-        bl.setMargins(px(12), 0, px(12), px(10));
-        barView.setVisibility("overview".equals(section) ? View.VISIBLE : View.GONE);
+        if (barWanted()) {
+            barView = saveBar(true);
+            FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM; bl.setMargins(px(12), 0, px(12), px(10));
+            rightPane.addView(barView, bl);
+            barView.setVisibility("overview".equals(section) ? View.VISIBLE : View.GONE);
+        }
         rootView = root;
         if (!query.isEmpty()) onQuery();
         setContentView(root);
+    }
+
+    private static final String[][] RAIL = {{"overview", "Overview", "home"}, {"live", "Live", "live"}, {"perf", "Speed", "perf"}, {"oc", "Overclock", "oc"}, {"apps", "Apps", "apps"},
+        {"picture", "Picture", "picture"}, {"look", "Look", "look"}, {"display", "Display", "display"}, {"memory", "Memory", "memory"}, {"connect", "Network", "connect"}, {"system", "System", "system"}};
+
+    /** One stop of the rail: an icon on a pill (filled when selected) and a short name under it. The pill is what entryRows keeps. */
+    private View railItem(final String id) {
+        String label = id, glyph = id;
+        for (String[] r : RAIL) if (r[0].equals(id)) { label = r[1]; glyph = r[2]; }
+        LinearLayout it = new LinearLayout(this); it.setOrientation(LinearLayout.VERTICAL); it.setGravity(Gravity.CENTER_HORIZONTAL);
+        it.setPadding(0, px(6), 0, px(6)); it.setMinimumHeight(px(64));
+        FrameLayout pill = new FrameLayout(this);
+        pill.addView(new GlyphView(this, glyph, ink(), 0), new FrameLayout.LayoutParams(px(30), px(30), Gravity.CENTER));
+        it.addView(pill, new LinearLayout.LayoutParams(px(56), px(32)));
+        TextView t = text(label, 11, true, dim()); t.setGravity(Gravity.CENTER); t.setSingleLine(true); t.setPadding(0, px(3), 0, 0);
+        it.addView(t, new LinearLayout.LayoutParams(-1, -2));
+        it.setContentDescription(label);
+        it.setOnClickListener(v -> selectSection(id));
+        entryRows.put(id, pill);
+        markEntry(pill, id.equals(section));
+        return it;
     }
 
     /** id, title, summary of the section list, in order. */
@@ -564,7 +577,8 @@ public class MainActivity extends Activity {
     }
     private void markEntry(View r, boolean on) {
         r.setSelected(on);
-        paintTile(r, on ? secContainer() : card());
+        if (radii.containsKey(r)) { paintTile(r, on ? secContainer() : card()); return; }
+        GradientDrawable pg = new GradientDrawable(); pg.setColor(on ? secContainer() : 0); pg.setCornerRadius(px(16)); r.setBackground(pg);   // a rail pill
     }
 
     /** Swaps the right pane with a short crossfade (none when animations are off). The selection is remembered in section. */
@@ -588,9 +602,7 @@ public class MainActivity extends Activity {
         resetPageRefs();
         rightCol.removeAllViews();
         col = rightCol;
-        TextView t = text(pageTitle(section), 30, true, ink());
-        t.setPadding(px(6), px(4), px(6), px(4));
-        rightCol.addView(t);
+        if (titleView != null) titleView.setText(pageTitle(section));
         buildPage(section);
     }
 
@@ -664,7 +676,7 @@ public class MainActivity extends Activity {
             for (java.util.Map.Entry<String, View> en : entryRows.entrySet()) markEntry(en.getValue(), !q && en.getKey().equals(section));
             if (!q) { fillRight(); return; }
             rightSv.animate().cancel(); rightSv.setAlpha(1f); resetPageRefs(); rightCol.removeAllViews();
-            TextView t = text("Search", 30, true, ink()); t.setPadding(px(6), px(4), px(6), px(4)); rightCol.addView(t);
+            if (titleView != null) titleView.setText("Search");
             fillResults(rightCol);
         } else if (homeBody != null) {
             homeBody.setVisibility(q ? View.GONE : View.VISIBLE);
@@ -845,6 +857,7 @@ public class MainActivity extends Activity {
         row.setBaselineAligned(false);
         String[] meterNames = {"Speed", "Battery", "Heat"};
         final int shownIdx = idx < 0 ? PRESETS.length : idx;   // the Custom card is the sixth
+        final int perRow = wide && Layouts.contentWidth(getResources().getConfiguration().screenWidthDp) >= 1000 ? 6 : 3;
         for (int i = 0; i <= PRESETS.length; i++) {
             final int n = i; boolean sel = i == shownIdx, custom = i == PRESETS.length;
             LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL);
@@ -862,9 +875,9 @@ public class MainActivity extends Activity {
             }
             c.addView(top, new LinearLayout.LayoutParams(-1, -2));
             String ap = get("profile_active", ""), pb = get("profile_base", "");
-            TextView nm = text(custom ? "Custom" : PRESETS[i][1], wide ? 19 : 22, true, fg); nm.setPadding(0, px(wide ? 8 : 12), 0, 0); c.addView(nm);
+            TextView nm = text(custom ? "Custom" : PRESETS[i][1], wide ? (perRow == 6 ? 17 : 19) : 22, true, fg); nm.setPadding(0, px(wide ? 8 : 12), 0, 0); c.addView(nm);
             String desc = custom ? (!ap.isEmpty() ? "Profile \u201c" + Profiles.shown(ap) + "\u201d is in use." : !pb.isEmpty() ? "Based on \u201c" + Profiles.shown(pb) + "\u201d, changed." : "Your own settings and your saved profiles.") : PRESETS[i][2];
-            TextView ds = text(desc, wide ? 12.5f : 13, false, fg2); ds.setMinLines(wide ? 3 : 4); ds.setPadding(0, px(4), 0, px(wide ? 6 : 10)); c.addView(ds);
+            TextView ds = text(desc, wide ? 12.5f : 13, false, fg2); ds.setMinLines(wide ? (perRow == 6 ? 5 : 3) : 4); ds.setPadding(0, px(4), 0, px(wide ? 6 : 10)); c.addView(ds);
             if (custom) {
                 String[] ps = get("profiles", "").split(","); int cnt = 0; for (String q : ps) if (!q.isEmpty()) cnt++;
                 LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
@@ -877,7 +890,7 @@ public class MainActivity extends Activity {
                     View seg = new View(this); GradientDrawable sg = new GradientDrawable(); sg.setCornerRadius(px(3));
                     sg.setColor(k < METERS[i][m] ? (m == 2 ? 0xFFFF8A4C : (sel ? onPriC() : accent())) : (sel ? (onPriC() & 0xFFFFFF) | 0x44000000 : line()));
                     seg.setBackground(sg);
-                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(wide ? 18 : 16), px(6)); sl.setMargins(px(3), 0, 0, 0);
+                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(wide ? (perRow == 6 ? 12 : 18) : 16), px(6)); sl.setMargins(px(3), 0, 0, 0);
                     mr.addView(seg, sl);
                 }
                 LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
@@ -885,9 +898,9 @@ public class MainActivity extends Activity {
             }
             c.setOnClickListener(v -> { if (custom) showProfilesSheet(); else if (n != idx) { set("preset", PRESETS[n][0]); build(); } });
             c.setContentDescription((custom ? "Custom. " + desc : PRESETS[i][1] + ". " + PRESETS[i][2]) + (sel ? " In use." : ""));
-            if (wide) {   // three across, two rows: all six visible without scrolling
-                LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(0, -1, 1f); wl.setMargins(i % 3 == 0 ? 0 : px(5), 0, i % 3 == 2 ? 0 : px(5), 0);
-                if (i % 3 == 0) { row = new LinearLayout(this); row.setBaselineAligned(false); LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2); rl.setMargins(0, i == 0 ? 0 : px(10), 0, 0); col.addView(row, rl); }
+            if (wide) {   // all six visible without scrolling: in one row when the pane is wide, else three across
+                LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(0, -1, 1f); wl.setMargins(i % perRow == 0 ? 0 : px(5), 0, i % perRow == perRow - 1 ? 0 : px(5), 0);
+                if (i % perRow == 0) { row = new LinearLayout(this); row.setBaselineAligned(false); LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2); rl.setMargins(0, i == 0 ? 0 : px(10), 0, 0); col.addView(row, rl); }
                 row.addView(c, wl);
                 continue;
             }
@@ -932,6 +945,9 @@ public class MainActivity extends Activity {
     }
 
     /** The bar under the overview: what is in use, and one button to keep it as a profile. */
+    /** The bar is only there when there is something to save (a profile in use that matches has nothing). */
+    private boolean barWanted() { return get("profile_active", "").isEmpty(); }
+
     private View saveBar(boolean floating) {
         LinearLayout bar = new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL);
         GradientDrawable g = new GradientDrawable(); g.setColor(sys(android.R.color.system_neutral1_800, android.R.color.system_neutral1_50)); g.setCornerRadii(new float[]{px(28), px(28), px(28), px(28), floating ? px(28) : 0, floating ? px(28) : 0, floating ? px(28) : 0, floating ? px(28) : 0});
@@ -944,7 +960,6 @@ public class MainActivity extends Activity {
         LinearLayout texts = new LinearLayout(this); texts.setOrientation(LinearLayout.VERTICAL);
         texts.addView(text(t, 17, true, ink())); texts.addView(text(sub, 13.5f, false, dim()));
         bar.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
-        if (!ap.isEmpty()) return bar;   // the profile in use matches the settings: nothing to save
         TextView b = text("Save as profile", 16, true, onAccent()); b.setGravity(Gravity.CENTER); b.setMinHeight(px(52)); b.setPadding(px(26), 0, px(26), 0);
         GradientDrawable bg = new GradientDrawable(); bg.setColor(accent()); bg.setCornerRadius(px(26)); b.setBackground(bg);
         b.setOnClickListener(v -> {
@@ -1883,6 +1898,7 @@ public class MainActivity extends Activity {
         if (f == null || f.isEmpty()) return "Not compiled";
         switch (f) {
             case "unknown": case "error": case "run-from-apk": case "run-from-apk-fallback": case "run-from-vdex-fallback": return "Not compiled";
+            case "verify": return "Verified only";
             default: return f.substring(0, 1).toUpperCase(Locale.US) + f.substring(1).replace('-', ' ');
         }
     }
@@ -1892,7 +1908,7 @@ public class MainActivity extends Activity {
         return appStates != null && NATIVE.contains(appStates.get(a.pkg)) ? 1 : 0;
     }
     /** ART reports "unknown" for packages without a dex file (resource overlays such as android.auto_generated_rro_vendor__ declare no hasCode=false but have no code). */
-    private boolean noDex(App a) { return appStates != null && "unknown".equals(appStates.get(a.pkg)); }
+    private boolean noDex(App a) { return appStates != null && (!appStates.containsKey(a.pkg) || "unknown".equals(appStates.get(a.pkg))); }
     private String baseState(App a) { return !a.code || noDex(a) ? "No code" : appStates == null ? "Loading" : stateLabel(appStates.get(a.pkg)); }
     private String stateText(App a) {
         String job = get0(appsSt, "compile_pkg_status"), jp = "", js = "";

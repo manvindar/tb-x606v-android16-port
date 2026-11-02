@@ -2,19 +2,19 @@ package org.tablet.tuner;
 
 /** Pure layout decisions (no Android types) so they can be unit tested on a JVM. All sizes are dp. */
 final class Layouts {
-    static final int WIDE_MIN_W = 840;       // narrower than this: the single column of a phone
+    static final int WIDE_MIN_W = 760;       // narrower than this: the single column of a phone (the tablet in portrait is 800 dp wide)
     static final int PIN_MIN_H = 720;        // shorter than this: the left pane scrolls as one piece
     static final int PANE_PAD = 24;          // padding on each side of the right pane
-    // ponytail: portrait on a 1000dp wide screen stays single column on purpose; set true to try two panes there too.
-    static final boolean WIDE_IN_PORTRAIT = false;
+    // a large screen in portrait (1000 dp wide) gets the rail layout too; phones are narrower than WIDE_MIN_W and keep the single column.
+    static final boolean WIDE_IN_PORTRAIT = true;
 
     private Layouts() { }
 
     /** Two panes: wide enough, and landscape unless WIDE_IN_PORTRAIT. */
     static boolean wide(int wDp, int hDp) { return wDp >= WIDE_MIN_W && (WIDE_IN_PORTRAIT || wDp > hDp); }
 
-    /** Left pane: about a quarter of the width, between 360 and 420. */
-    static int leftWidth(int wDp) { return Math.max(360, Math.min(420, wDp * 27 / 100)); }
+    /** Left pane: a navigation rail of icons. */
+    static int leftWidth(int wDp) { return 88; }
 
     /** Usable width of the content in the right pane (left pane, 1 dp divider and the side padding taken off). */
     static int contentWidth(int wDp) { return wDp - leftWidth(wDp) - 1 - 2 * PANE_PAD; }
