@@ -533,9 +533,9 @@ public class MainActivity extends Activity {
         final EditText e = new EditText(this);
         e.setBackground(null); e.setHint("Search settings"); e.setHintTextColor(dim()); e.setTextColor(ink()); e.setTextSize(16);
         e.setSingleLine(true); e.setImeOptions(EditorInfo.IME_ACTION_SEARCH); e.setMinHeight(px(52));
-        e.setText(query);
+        e.setText(query); e.setContentDescription("Search settings");
         final TextView x = text("✕", 18, false, dim());
-        x.setPadding(px(14), px(10), px(14), px(10)); x.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
+        x.setPadding(px(14), px(10), px(14), px(10)); x.setMinWidth(px(48)); x.setMinHeight(px(48)); x.setGravity(Gravity.CENTER); x.setContentDescription("Clear search"); x.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
         x.setOnClickListener(v -> e.setText(""));
         e.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
@@ -757,7 +757,7 @@ public class MainActivity extends Activity {
         GradientDrawable tg = new GradientDrawable(); tg.setColor(card()); tg.setCornerRadius(px(28)); tabs.setBackground(tg);
         tabs.setPadding(px(4), px(4), px(4), px(4));
         final TextView t0 = text("Graphs", 15, true, ink()), t1 = text("State", 15, true, ink());
-        for (TextView t : new TextView[]{t0, t1}) { t.setGravity(Gravity.CENTER); t.setPadding(0, px(10), 0, px(10)); tabs.addView(t, new LinearLayout.LayoutParams(0, -2, 1f)); }
+        for (TextView t : new TextView[]{t0, t1}) { t.setGravity(Gravity.CENTER); t.setPadding(0, px(10), 0, px(10)); t.setMinHeight(px(48)); tabs.addView(t, new LinearLayout.LayoutParams(0, -2, 1f)); }
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2); tp.setMargins(0, px(10), 0, px(8));
         col.addView(tabs, tp);
 
@@ -834,6 +834,11 @@ public class MainActivity extends Activity {
             gv[2].setText(curGpu < 0 ? "–" : (curGpu / 1000) + " MHz");
             gv[3].setText(curTemp < 0 ? "–" : String.format(Locale.US, "%.0f °C", curTemp / 1000f));
             gv[4].setText(curAvail < 0 ? "–" : String.format(Locale.US, "%.1f", curAvail / 1048576f));
+        }
+        if (graphs.size() == 4) {
+            String[] names = {"CPU clock", "GPU clock", "Chip temperature", "Free memory"};
+            String[] now = {gv[0].getText() + " and " + gv[1].getText() + " gigahertz", gv[2].getText().toString(), gv[3].getText().toString(), gv[4].getText() + " gigabytes"};
+            for (int i = 0; i < 4; i++) graphs.get(i).setContentDescription(names[i] + " over the last 90 seconds, now " + now[i]);
         }
         if (graphs.size() == 4) graphs.get(1).setRange(0, Math.max(800f, hGpu.max()), gpuRules());
         for (LiveGraph g : graphs) g.invalidate();
@@ -1045,7 +1050,7 @@ public class MainActivity extends Activity {
             if (n.isEmpty()) continue;
             final String shown = n.replace('_', ' ');
             TextView del = text("Delete", 14, true, accent());
-            del.setPadding(px(12), px(8), px(4), px(8));
+            del.setPadding(px(12), px(8), px(4), px(8)); del.setMinHeight(px(48)); del.setMinWidth(px(48)); del.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
             del.setOnClickListener(v -> new AlertDialog.Builder(this).setMessage("Delete the profile \"" + shown + "\"?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Delete", (d, w) -> set("delete_profile", n)).show());
             row(c, n.equals(active) ? shown + "  ✓" : shown, n.equals(active) ? "In use" : "Tap to apply", del)

@@ -28,7 +28,12 @@ final class DialView extends View {
     void setSelected(int i) { selected = i; dragPos = -1; invalidate(); }
     void setOnPick(OnPick o) { onPick = o; }
     /** Live readings drawn inside the arc: [0] large (with its label), [1] and [2] side by side, [3] one dim line. Labels may be empty. */
-    void setLive(String[] vals, String[] labs) { liveVals = vals; liveLabs = labs; invalidate(); }
+    void setLive(String[] vals, String[] labs) {
+        liveVals = vals; liveLabs = labs;
+        String sel = selected >= 0 && selected < labels.length ? "Preset " + labels[selected] + ". " : "";
+        if (vals.length >= 3) setContentDescription(sel + "CPU " + vals[0] + " gigahertz, GPU " + vals[1] + ", chip temperature " + vals[2] + ". Drag to pick a preset.");
+        invalidate();
+    }
     /** Caps the arc radius (dp) for a compact dial. */
     void setMaxRadius(float dp) { maxR = dp; requestLayout(); }
 
