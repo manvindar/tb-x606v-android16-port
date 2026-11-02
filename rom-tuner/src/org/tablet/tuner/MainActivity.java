@@ -16,6 +16,7 @@ import android.view.inputmethod.EditorInfo;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
 
 import java.util.ArrayList;
@@ -40,6 +41,13 @@ public class MainActivity extends Activity {
     private LinearLayout rightCol;
     private final java.util.HashMap<String, View> entryRows = new java.util.HashMap<>();
     private String builtKey = "";
+    // search: the query survives a rebuild; the index (page, title, sub, group) is built once from the pages themselves
+    private String query = "";
+    private boolean collecting;
+    private String collPage, collGroup, focusTitle;
+    private final ArrayList<String[]> index = new ArrayList<>();
+    private View rootView;
+    private LinearLayout homeBody, resultsBox;
     private int swapTok;
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
@@ -65,13 +73,13 @@ public class MainActivity extends Activity {
         if (p != null) { page = p; section = p; }
         if (b != null) {
             page = b.getString("page", page); section = b.getString("section", section);
-            appsQuery = b.getString("query", ""); appsFilter = b.getInt("filter", 0);
+            appsQuery = b.getString("query", ""); appsFilter = b.getInt("filter", 0); query = b.getString("q", "");
         }
     }
 
     @Override protected void onSaveInstanceState(Bundle b) {
         super.onSaveInstanceState(b);
-        b.putString("page", page); b.putString("section", section); b.putString("query", appsQuery); b.putInt("filter", appsFilter);
+        b.putString("page", page); b.putString("section", section); b.putString("query", appsQuery); b.putInt("filter", appsFilter); b.putString("q", query);
     }
 
     /** Rotation, window resize and a display size change land here (see configChanges in the manifest): rebuild the tree, keep the state. */
@@ -82,7 +90,7 @@ public class MainActivity extends Activity {
         if (st != null) build();
     }
 
-    @Override protected void onResume() { super.onResume(); st = Cfg.load(this); build(); ui.post(tick); }
+    @Override protected void onResume() { super.onResume(); st = Cfg.load(this); index.clear(); build(); ui.post(tick); }
 
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(tick); }
 
@@ -136,13 +144,14 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable g = new GradientDrawable();
-        g.setColor(card()); g.setCornerRadius(px(26));
+        g.setColor(card()); g.setCornerRadius(px(28));
         c.setBackground(g);
         c.setPadding(0, px(4), 0, px(4));
         return c;
     }
 
     private LinearLayout group(String title) {
+        if (collecting) collGroup = title;
         LinearLayout host = cols > 1 ? shorterColumn() : col;
         if (title != null) {
             TextView t = text(title, 14, true, accent());
@@ -187,9 +196,8 @@ public class MainActivity extends Activity {
     }
 
     private void divider(LinearLayout c) {
-        View v = new View(this); v.setBackgroundColor(line());
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 1);
-        lp.setMargins(px(20), 0, px(20), 0);
+        View v = new View(this); v.setBackgroundColor(surface());   // a gap in the page colour: the rows read as separate tiles
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, px(2));
         c.addView(v, lp);
     }
 
@@ -199,6 +207,8 @@ public class MainActivity extends Activity {
         r.setOrientation(LinearLayout.HORIZONTAL);
         r.setGravity(Gravity.CENTER_VERTICAL);
         r.setMinimumHeight(px(60));
+        r.setTag(title);
+        if (collecting) index.add(new String[]{collPage, title, sub == null ? "" : sub, collGroup == null ? "" : collGroup});
         r.setPadding(px(20), px(12), px(16), px(12));
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
@@ -306,12 +316,13 @@ public class MainActivity extends Activity {
     private void build() {
         int[] y = builtKey.equals(viewKey()) || builtKey.isEmpty() ? new int[]{sy(mainSv), sy(leftSv), sy(rightSv)} : new int[3];
         resetRefs();
-        mainSv = leftSv = rightSv = null; rightCol = null; entryRows.clear();
+        mainSv = leftSv = rightSv = null; rightCol = null; entryRows.clear(); homeBody = resultsBox = null; searchBox = null;
         Configuration cf = getResources().getConfiguration();
         wide = Layouts.wide(cf.screenWidthDp, cf.screenHeightDp);
         if (wide) buildWide(cf.screenWidthDp, cf.screenHeightDp); else buildNarrow();
         builtKey = viewKey();
         restoreScroll(mainSv, y[0]); restoreScroll(leftSv, y[1]); restoreScroll(rightSv, y[2]);
+        runFocus();
     }
     private static int sy(ScrollView v) { return v == null ? 0 : v.getScrollY(); }
     private static void restoreScroll(final ScrollView v, final int y) { if (v != null && y > 0) v.post(() -> v.scrollTo(0, y)); }
@@ -341,13 +352,21 @@ public class MainActivity extends Activity {
             back.setOnClickListener(v -> go(parentPage()));
             head.addView(back);
         }
-        head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(page), HOME.equals(page) ? 30 : 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(text(HOME.equals(page) ? "ROM Tuner" : pageTitle(page), HOME.equals(page) ? 34 : 30, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
         status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
         status.setMaxWidth(px(260)); status.setGravity(Gravity.END);
         head.addView(status);
         col.addView(head);
 
-        if (HOME.equals(page)) pageHome(); else buildPage(page);
+        if (HOME.equals(page)) {
+            col.addView(searchBar(), searchLp());
+            homeBody = new LinearLayout(this); homeBody.setOrientation(LinearLayout.VERTICAL);
+            resultsBox = new LinearLayout(this); resultsBox.setOrientation(LinearLayout.VERTICAL);
+            col.addView(homeBody); col.addView(resultsBox);
+            LinearLayout host = col; col = homeBody; pageHome(); col = host;
+            onQuery();
+        } else buildPage(page);
+        rootView = sv;
         setContentView(sv);
     }
 
@@ -402,11 +421,12 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setPadding(px(6), 0, px(6), px(4));
-        head.addView(text("ROM Tuner", 26, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
+        head.addView(text("ROM Tuner", 28, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
         status = text(st.isEmpty() ? "Waiting for the tuner service…" : "", 13, false, dim());
         status.setMaxWidth(px(150)); status.setGravity(Gravity.END);
         head.addView(status);
         header.addView(head);
+        header.addView(searchBar(), searchLp());
         presetDial(true);
         liveCard(true);
         col = list;
@@ -436,6 +456,8 @@ public class MainActivity extends Activity {
         rightSv.addView(rightCol, new FrameLayout.LayoutParams(-1, -2));
         root.addView(rightSv, new LinearLayout.LayoutParams(0, -1, 1f));
         fillRight();
+        rootView = root;
+        if (!query.isEmpty()) onQuery();
         setContentView(root);
     }
 
@@ -443,17 +465,17 @@ public class MainActivity extends Activity {
     private String[][] entries() {
         return new String[][]{
             {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
+            {"apps", "App speed", "Compile state of every app, compile or reset one"},
             {"picture", "Picture", pictureSummary()}, {"look", "Look", lookSummary()}, {"display", "Display and touch", displaySummary()},
             {"memory", "Memory and storage", memorySummary()}, {"connect", "Connections", connectSummary()},
-            {"system", "System", get("status", "Shortcuts, logging, restart")},
-            {"apps", "App speed", "Compile state of every app, compile or reset one"}};
+            {"system", "System", get("status", "Shortcuts, logging, restart")}};
     }
     private java.util.List<String> entryIds() { ArrayList<String> r = new ArrayList<>(); for (String[] e : entries()) r.add(e[0]); return r; }
 
     private void sectionEntries() {
         LinearLayout c = null;
         for (final String[] e : entries()) {
-            if (c == null || e[0].equals("picture") || e[0].equals("apps")) c = group(null);
+            if (e[0].equals("perf")) c = group("Speed"); else if (e[0].equals("picture")) c = group("Screen"); else if (e[0].equals("memory")) c = group("Device");
             final String id = e[0];
             View r = row(c, e[1], e[2], null);
             TextView sub = (TextView) ((LinearLayout) ((LinearLayout) r).getChildAt(0)).getChildAt(1);   // one line each keeps the list short
@@ -489,10 +511,142 @@ public class MainActivity extends Activity {
         resetPageRefs();
         rightCol.removeAllViews();
         col = rightCol;
-        TextView t = text(pageTitle(section), 26, true, ink());
+        TextView t = text(pageTitle(section), 30, true, ink());
         t.setPadding(px(6), px(4), px(6), px(4));
         rightCol.addView(t);
         buildPage(section);
+    }
+
+    // ---------- search ----------
+    private EditText searchBox;
+
+    private LinearLayout.LayoutParams searchLp() { LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(10), 0, px(6)); return lp; }
+
+    private View searchBar() {
+        LinearLayout w = new LinearLayout(this);
+        w.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(28));
+        w.setBackground(g);
+        w.setPadding(px(20), 0, px(6), 0);
+        final EditText e = new EditText(this);
+        e.setBackground(null); e.setHint("Search settings"); e.setHintTextColor(dim()); e.setTextColor(ink()); e.setTextSize(16);
+        e.setSingleLine(true); e.setImeOptions(EditorInfo.IME_ACTION_SEARCH); e.setMinHeight(px(52));
+        e.setText(query);
+        final TextView x = text("✕", 18, false, dim());
+        x.setPadding(px(14), px(10), px(14), px(10)); x.setVisibility(query.isEmpty() ? View.GONE : View.VISIBLE);
+        x.setOnClickListener(v -> e.setText(""));
+        e.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(Editable s) {
+                String n = s.toString().trim();
+                x.setVisibility(n.isEmpty() ? View.GONE : View.VISIBLE);
+                if (n.equals(query)) return;
+                query = n;
+                if (!n.isEmpty()) buildIndex();
+                onQuery();
+            }
+        });
+        e.setOnEditorActionListener((v, a, ev) -> { hideKeyboard(); return true; });
+        w.addView(e, new LinearLayout.LayoutParams(0, -2, 1f));
+        w.addView(x);
+        searchBox = e;
+        return w;
+    }
+
+    private void hideKeyboard() {
+        android.view.inputmethod.InputMethodManager m = (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (m != null && rootView != null) m.hideSoftInputFromWindow(rootView.getWindowToken(), 0);
+    }
+
+    /**
+     * Collects every row of every page (except the app list, which is built from the package list) by building the pages into a scratch
+     * column, so the index never drifts from the screens. The page refs the scratch build sets are put back afterwards.
+     */
+    private void buildIndex() {
+        if (!index.isEmpty()) return;
+        LinearLayout sCol = col; int sCols = cols;
+        TextView a = liveCpu, b = liveGpu, c = liveMem, d = liveHeat, e = compileView, f = ocView;
+        LinearLayout pb = progBox; TextView pt = progTitle, px = progText; ProgressBar pg = progBar;
+        collecting = true; col = new LinearLayout(this); cols = 1;
+        try {
+            for (String[] en : entries()) index.add(new String[]{en[0], en[1], en[2], ""});
+            for (String[] en : entries()) { if (en[0].equals("apps")) continue; collPage = en[0]; collGroup = null; col.removeAllViews(); buildPage(en[0]); }
+        } finally {
+            collecting = false; col = sCol; cols = sCols;
+            liveCpu = a; liveGpu = b; liveMem = c; liveHeat = d; compileView = e; ocView = f;
+            progBox = pb; progTitle = pt; progText = px; progBar = pg;
+        }
+    }
+
+    /** The query changed: show the results where the settings are (the home body in one pane, the right pane in two), or put the page back. */
+    private void onQuery() {
+        boolean q = !query.isEmpty();
+        if (wide) {
+            if (rightCol == null) return;
+            for (java.util.Map.Entry<String, View> en : entryRows.entrySet()) markEntry(en.getValue(), !q && en.getKey().equals(section));
+            if (!q) { fillRight(); return; }
+            rightSv.animate().cancel(); rightSv.setAlpha(1f); resetPageRefs(); rightCol.removeAllViews();
+            TextView t = text("Search", 30, true, ink()); t.setPadding(px(6), px(4), px(6), px(4)); rightCol.addView(t);
+            fillResults(rightCol);
+        } else if (homeBody != null) {
+            homeBody.setVisibility(q ? View.GONE : View.VISIBLE);
+            resultsBox.setVisibility(q ? View.VISIBLE : View.GONE);
+            resultsBox.removeAllViews();
+            if (q) fillResults(resultsBox);
+        }
+    }
+
+    private void fillResults(LinearLayout host) {
+        ArrayList<String[]> hits = new ArrayList<>();
+        for (String[] it : index) if (it[1].equals(pageTitle(it[0])) ? Search.matches(query, it[1]) : Search.matches(query, it[1], it[2], pageTitle(it[0]), it[3])) hits.add(it);   // a page matches on its name only: its summary is just the current values
+        Collections.sort(hits, (x, y) -> Search.rank(query, x[1]) - Search.rank(query, y[1]));
+        if (hits.isEmpty()) {
+            TextView t = text("No settings match \u201c" + query + "\u201d.", 15, false, dim());
+            t.setPadding(px(10), px(16), px(10), 0); host.addView(t);
+            return;
+        }
+        LinearLayout c = newCard();
+        host.addView(c, new LinearLayout.LayoutParams(-1, -2));
+        int n = 0;
+        for (final String[] it : hits) {
+            if (++n > 40) break;
+            boolean pageItem = it[1].equals(pageTitle(it[0]));
+            String sub = pageItem ? it[2] : pageTitle(it[0]) + (it[3].isEmpty() ? "" : " \u203a " + it[3]);
+            row(c, it[1], sub, text("\u203a", 22, false, dim())).setOnClickListener(v -> openResult(it[0], it[1]));
+        }
+    }
+
+    /** Opens the page of a result and scrolls to its row, which flashes once. */
+    private void openResult(String p, String title) {
+        hideKeyboard();
+        query = ""; focusTitle = title.equals(pageTitle(p)) ? null : title;
+        if (searchBox != null) searchBox.setText("");
+        if (!wide) { go(p); return; }
+        section = p; builtKey = viewKey();
+        for (java.util.Map.Entry<String, View> en : entryRows.entrySet()) markEntry(en.getValue(), en.getKey().equals(p));
+        fillRight(); rightSv.scrollTo(0, 0); runFocus();
+    }
+
+    private void runFocus() {
+        final String t = focusTitle; focusTitle = null;
+        final ScrollView sv = wide ? rightSv : mainSv;
+        if (t == null || sv == null) return;
+        sv.post(() -> {
+            final View v = findTag(sv, t);
+            if (v == null) return;
+            int y = 0; View c = v;
+            while (c != null && c != sv) { y += c.getTop(); c = c.getParent() instanceof View ? (View) c.getParent() : null; }
+            sv.scrollTo(0, Math.max(0, y - px(140)));
+            GradientDrawable g = new GradientDrawable(); g.setColor((accent() & 0xFFFFFF) | 0x44000000); g.setCornerRadius(px(20));
+            v.setBackground(g);
+            ui.postDelayed(() -> v.setBackground(null), 1600);
+        });
+    }
+    private static View findTag(View v, String t) {
+        if (t.equals(v.getTag())) return v;
+        if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { View r = findTag(((ViewGroup) v).getChildAt(i), t); if (r != null) return r; }
+        return null;
     }
 
     // ---------- live readout (read straight from sysfs; the tuner's ROM runs permissive, elsewhere the cells show a dash) ----------
@@ -548,7 +702,7 @@ public class MainActivity extends Activity {
     private void progressBlock(LinearLayout card) {
         progBox = new LinearLayout(this);
         progBox.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(26));
+        GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(28));
         progBox.setBackground(g);
         progBox.setPadding(px(20), px(14), px(20), px(14));
         progTitle = text("", 16, true, ink());
@@ -621,7 +775,7 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(grid ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
         GradientDrawable g = new GradientDrawable();
-        g.setColor(card()); g.setCornerRadius(px(26));
+        g.setColor(card()); g.setCornerRadius(px(28));
         c.setBackground(g);
         LinearLayout top = c, bottom = c;
         if (grid) {
@@ -666,14 +820,15 @@ public class MainActivity extends Activity {
     private void pageHome() {
         presetDial(false);
         liveCard(false);
-        LinearLayout c = group(null);
+        LinearLayout c = group("Speed");
         rowGo(c, "Performance details", perfSummary(), "perf");
         rowGo(c, "Overclock", ocSummary(), "oc");
         profileRows(c);
-        c = group(null);
+        c = group("Screen");
         rowGo(c, "Picture", pictureSummary(), "picture");
         rowGo(c, "Look", lookSummary(), "look");
         rowGo(c, "Display and touch", displaySummary(), "display");
+        c = group("Device");
         rowGo(c, "Memory and storage", memorySummary(), "memory");
         rowGo(c, "Connections", connectSummary(), "connect");
         rowGo(c, "System", get("status", "Shortcuts, logging, restart"), "system");
@@ -1051,7 +1206,7 @@ public class MainActivity extends Activity {
         q.setTextColor(ink()); q.setHintTextColor(dim());
         q.setImeOptions(EditorInfo.IME_ACTION_DONE);
         q.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        GradientDrawable qg = new GradientDrawable(); qg.setColor(card()); qg.setCornerRadius(px(26));
+        GradientDrawable qg = new GradientDrawable(); qg.setColor(card()); qg.setCornerRadius(px(28));
         q.setBackground(qg); q.setPadding(px(20), px(14), px(20), px(14));
         q.setText(appsQuery);
         q.addTextChangedListener(new TextWatcher() {
