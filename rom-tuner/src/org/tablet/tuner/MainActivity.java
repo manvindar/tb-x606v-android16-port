@@ -1415,6 +1415,8 @@ public class MainActivity extends Activity {
         if (!wide) liveCard(false);
         TextView hint = text("Changing a setting here turns the preset into Custom. The dial on the " + (wide ? "left" : "home screen") + " sets all of these together.", 13.5f, false, dim());
         hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
+        LinearLayout cb = group("Apps");
+        rowSwitch(cb, "Boost while CarPlay is open", "Runs the Performance preset while DiPlay or Pillion is on screen, then goes back. Only from Battery, Balanced or Smooth; custom settings and profiles are left alone.", "carplay_boost", "0");
         LinearLayout c = group("Clock speed");
         rowChoice(c, "GPU clock", "Locks the PowerVR GPU to one speed. Ignored in Battery.", "gpu_freq", gpuLabels(), gpuValues(), "680000");
         rowChoice(c, "Fast cores, top speed", "Limits the four fast cores", "cap_big",

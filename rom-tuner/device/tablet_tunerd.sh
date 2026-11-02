@@ -298,6 +298,7 @@ seedlive() {
   has() { grep -q "^$1=" $S; }
   v() { [ "$1" = null ] || [ -z "$1" ] && echo "$2" || echo "$1"; }
   has screen_timeout || putkey screen_timeout "$(v "$(settings get system screen_off_timeout)" 60000)"
+  has carplay_boost || putkey carplay_boost 0
   has font_weight || putkey font_weight "$(v "$(settings get secure font_weight_adjustment)" 0)"
   has text_contrast || putkey text_contrast "$(v "$(settings get secure high_text_contrast_enabled)" 0)"
   has font_scale || putkey font_scale "$(v "$(settings get system font_scale)" 1.0)"
@@ -393,6 +394,7 @@ valid() {   # $1 key, $2 value
     pq_bri) oneof "$2" 0 1 2 3 4 5 6 7 8 9;;
     font_weight) oneof "$2" 0 100 200 300;;
     text_contrast) oneof "$2" 0 1;;
+    carplay_boost) oneof "$2" 0 1;;
     density) case $2 in reset|1[2-9][0-9]|2[0-9][0-9]|3[0-9][0-9]|400) return 0;; esac; return 1;;
     pq_dre|pq_vp_dre|pq_ultrares) oneof "$2" 0 1 2;;
     pq_hdr) oneof "$2" 0 1;;
@@ -517,12 +519,12 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|preview_photo|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|font_weight|text_contrast|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_bri|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|preview_photo|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|font_weight|text_contrast|carplay_boost|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_bri|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
       governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster|touch_duration_ms|touch_opp|touch_boost|schedstats|down_throttle|up_throttle|cap_margin|mcdi|watermark) U=1; putkey $k $v;;
-      screen_timeout|font_scale|font_weight|text_contrast|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
+      screen_timeout|font_scale|font_weight|text_contrast|carplay_boost|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
       pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_bri|pq_color) putkey $k $v; Q=1; load; continue;;
       oc_master|oc_cpu_uv|oc_gpu) putkey $k $v;;
@@ -660,11 +662,40 @@ enforce() {
   grep -q "^0: min_freq_idx = -1" /proc/ppm/policy/userlimit_min_cpu_freq && { w /proc/ppm/policy/userlimit_min_cpu_freq "0 $minb"; w /proc/ppm/policy/userlimit_min_cpu_freq "1 $minl"; }
   [ "$gpu_eff" = 1 ] && head -1 /proc/gpufreq/gpufreq_opp_freq | grep -q disabled && w /proc/gpufreq/gpufreq_opp_freq $gpu_freq
 }
+# Boost while a CarPlay receiver is on screen: when DiPlay (or its fork Pillion) is the top app and the preset is one of the lighter named ones (Battery,
+# Balanced, Smooth), run the Performance preset, then put the snapshot back when it leaves. Custom settings, profiles, Performance and Extreme are never touched.
+BOOST=/data/local/tmp/tuner.boost
+carplay_top() {   # the top app has oom_score_adj 0; a running session that is not on screen has a higher one
+  for p in org.tablet.pillion com.shihab.diplay; do for pid in $(pidof $p); do [ "$(cat /proc/$pid/oom_score_adj 2>/dev/null)" = 0 ] && return 0; done; done
+  return 1
+}
+boost_off() {   # the snapshot is only put back while the boost is still what is set: if the user picked something else meanwhile, theirs wins
+  load
+  if [ "$preset" = performance ] && [ -z "$profile_active" ]; then
+    while IFS== read -r k v; do [ -n "$k" ] && putkey "$k" "$v"; done < $BOOST; rm -f $BOOST
+    load; calc; profile; tune; publish; log "carplay boost off"
+  else rm -f $BOOST; log "carplay boost dropped, settings were changed meanwhile"; fi
+}
+boostwatch() {
+  load
+  if [ "$carplay_boost" != 1 ]; then [ -f $BOOST ] && { mkdir $LOCK 2>/dev/null || return; boost_off; rmdir $LOCK; }; return; fi
+  if carplay_top; then
+    [ -f $BOOST ] && return
+    case $preset in battery|balanced|smooth) ;; *) return;; esac
+    mkdir $LOCK 2>/dev/null || return
+    { for kv in $(presets performance); do k=${kv%%=*}; eval x=\$$k; [ -n "$x" ] && echo "$k=$x"; done; echo "preset=$preset"; echo "profile_active=$profile_active"; } > $BOOST
+    for kv in $(presets performance); do putkey ${kv%%=*} ${kv#*=}; done; putkey preset performance; putkey profile_active ""
+    load; calc; profile; tune; publish; log "carplay boost on"; rmdir $LOCK
+  else
+    [ -f $BOOST ] && { mkdir $LOCK 2>/dev/null || return; boost_off; rmdir $LOCK; }
+  fi
+}
 # the compile run ends on its own, so tell the app when its status changes
 CS=
 cstat_pub() { n=$(cstat); [ "$n" = "$CS" ] && return; mkdir $LOCK 2>/dev/null || return; [ "$CS" = running ] && apps_refresh_bg; CS=$n; load; publish; rmdir $LOCK; }
 ( while sleep 5; do enforce; cstat_pub; done ) &
 DSTART=$(date +%s)
 ( while sleep 2; do oc_watch; prog_pub; done ) &
+( while sleep 3; do boostwatch; done ) &
 publish; log "daemon ready"
 exec inotifyd /system/bin/tablet_tunerd.sh $APP:nw   # toybox mask parsing is quirky: single letters are rejected, "wn" drops w
