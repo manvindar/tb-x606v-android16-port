@@ -15,6 +15,7 @@ final class LiveGraph extends View {
     private float[] rules = new float[0];
     private int ruleColor, guardColor;
     private boolean fillFirst;
+    private float heightDp = 104;
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
 
@@ -27,9 +28,11 @@ final class LiveGraph extends View {
     }
     void setRange(float min, float max, float[] rules) { this.min = min; this.max = Math.max(max, min + 0.001f); this.rules = rules; }
 
+    void setHeightDp(float h) { heightDp = h; requestLayout(); }
+
     private float dp(float v) { return v * getResources().getDisplayMetrics().density; }
 
-    @Override protected void onMeasure(int w, int h) { setMeasuredDimension(resolveSize(0, w), (int) dp(104)); }
+    @Override protected void onMeasure(int w, int h) { setMeasuredDimension(resolveSize(0, w), (int) dp(heightDp)); }
 
     @Override protected void onDraw(Canvas c) {
         float w = getWidth(), top = dp(8), bot = getHeight() - dp(8), span = bot - top;

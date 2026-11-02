@@ -3,3 +3,4 @@ vendor*.img
 *.img
 *.xz
 .DS_Store
+.superpowers/

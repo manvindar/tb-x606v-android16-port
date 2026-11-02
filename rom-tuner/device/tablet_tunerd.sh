@@ -337,6 +337,11 @@ pq_live() {
 PF=/data/local/tmp/tuner.profiles
 PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
 # a bare | in a ${%%} pattern is alternation in the device's mksh (it matched the whole line), so it is escaped below
+# a copy of the current wallpaper for the picture preview in the app (the file is the system's, the app cannot read it)
+preview_photo() {
+  w=/data/system/users/0/wallpaper_orig; [ -f $w ] || w=/data/system/users/0/wallpaper; [ -f $w ] || return 0
+  cat $w > $APP/preview.jpg && chown $(stat -c %u:%g $APP/state) $APP/preview.jpg && chmod 660 $APP/preview.jpg && log "preview photo copied"
+}
 pf_line() { while IFS= read -r l_; do [ "${l_%%\|*}" = "$1" ] && { echo "$l_"; return 0; }; done < $PF 2>/dev/null; return 1; }   # exact name match (no regex), prints the line
 profile_save() {   # $1 name; an existing profile of that name is replaced in place, a new one goes last
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done
@@ -370,7 +375,7 @@ valid() {   # $1 key, $2 value
     watermark) oneof "$2" 10 20 30;;
     cached_apps) oneof "$2" default 16 24 32 48;;
     compile_pkg|compile_pkg_profile|reset_pkg) pkgok "$2";;
-    refresh_apps) oneof "$2" 1;;
+    refresh_apps|preview_photo) oneof "$2" 1;;
     oc_master) oneof "$2" 0 1;;
     pq_mode) oneof "$2" 0 2;;
     pq_contrast|pq_sat) oneof "$2" 0 1 2 3 4 5 6 7 8 9;;
@@ -493,7 +498,7 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|preview_photo|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
@@ -517,6 +522,7 @@ handle() {
       compile_pkg_profile) pkg_enqueue speed-profile "$v"; continue;;
       reset_pkg) pkg_enqueue reset "$v"; continue;;
       refresh_apps) apps_refresh_bg; continue;;
+      preview_photo) preview_photo; continue;;   # the app cannot read the wallpaper itself
       *) log "unknown $k"; continue;;
     esac
     load

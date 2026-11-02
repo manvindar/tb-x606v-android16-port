@@ -34,7 +34,7 @@ public class MainActivity extends Activity {
     private boolean night;
     private float dp;
     private String page = HOME;                         // narrow layout: the page on screen
-    private String section = "live";                    // two pane layout: the section in the right pane
+    private String section = "overview";                    // two pane layout: the section in the right pane
     private boolean wide;                               // layout mode of the tree built last
     private int cols = 1, appsCols = 1;                 // columns for setting cards and for app rows
     private ScrollView mainSv, leftSv, rightSv;
@@ -48,12 +48,16 @@ public class MainActivity extends Activity {
     private final ArrayList<String[]> index = new ArrayList<>();
     private View rootView;
     private LinearLayout homeBody, resultsBox;
+    private View barView;
     private int swapTok;
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { sample(); refreshLive(); refreshDial(); refreshGraphs(); refreshCompile(); refreshProgress(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
-    private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
+    private final Runnable tick = new Runnable() { @Override public void run() { sample(); refreshLive(); refreshOverview(); refreshGraphs(); refreshCompile(); refreshProgress(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
+    private final Pending pend = new Pending();
+    /** The published state with the values changed in the last seconds laid over it (the daemon publishes late). */
+    private Map<String, String> loadState() { return pend.overlay(Cfg.load(this), System.currentTimeMillis()); }
+    private final Runnable reload = () -> { st = loadState(); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
     private static final String[][] PRESETS = {
@@ -90,13 +94,13 @@ public class MainActivity extends Activity {
         if (st != null) build();
     }
 
-    @Override protected void onResume() { super.onResume(); st = Cfg.load(this); index.clear(); build(); ui.post(tick); }
+    @Override protected void onResume() { super.onResume(); st = loadState(); index.clear(); build(); ui.post(tick); }
 
     @Override protected void onPause() { super.onPause(); ui.removeCallbacks(tick); }
 
     @Override public void onBackPressed() { if (!wide && !HOME.equals(page)) go(parentPage()); else super.onBackPressed(); }
 
-    private String parentPage() { return "apps".equals(page) ? "system" : HOME; }
+    private String parentPage() { return HOME; }
 
     /** The page or section the user is looking at. */
     private String cur() { return wide ? section : page; }
@@ -104,8 +108,11 @@ public class MainActivity extends Activity {
     // ---------- state ----------
     private String get(String k, String def) { String v = st.get(k); return v == null || v.isEmpty() ? def : v; }
 
+    /** Changes a value that is sent elsewhere (a direct request): shown at once and kept over older published state. */
+    private void put(String k, String v) { st.put(k, v); pend.put(k, v, System.currentTimeMillis()); Cfg.request(this, k, v); }
+
     private void set(String k, String v) {
-        st.put(k, v);
+        st.put(k, v); pend.put(k, v, System.currentTimeMillis());
         Cfg.request(this, k, v);
         setStatus("Applying…");
         ui.removeCallbacks(reload);
@@ -266,28 +273,32 @@ public class MainActivity extends Activity {
     }
 
     /** A row that shows the current value; tapping opens a list. */
-    private void rowChoice(LinearLayout c, final String title, String sub, final String key, final String[] labels, final String[] vals, String def) {
-        String cur = get(key, def); int pos = -1;
+    private void rowChoice(LinearLayout c, final String title, String sub, final String key, final String[] labels, final String[] vals, String def) { rowChoice(c, title, sub, key, labels, vals, def, false); }
+
+    private void rowChoice(LinearLayout c, final String title, String sub, final String key, final String[] labels, final String[] vals, String def, final boolean pic) {
+        String cur = pic ? pv(key, def) : get(key, def); int pos = -1;
         for (int i = 0; i < vals.length; i++) if (vals[i].equals(cur)) pos = i;
         TextView v = text((pos >= 0 ? labels[pos] : cur) + "  ›", 15, true, accent());
         final int sel = pos;
         row(c, title, sub, v).setOnClickListener(x ->
             new AlertDialog.Builder(this).setTitle(title)
-                .setSingleChoiceItems(labels, sel, (d, i) -> { d.dismiss(); if (i != sel) set(key, vals[i]); build(); })
+                .setSingleChoiceItems(labels, sel, (d, i) -> { d.dismiss(); if (i != sel) { if (pic) picEdit.put(key, vals[i]); else set(key, vals[i]); } build(); })
                 .setNegativeButton("Cancel", null).show());
     }
 
-    private void rowSlider(LinearLayout c, String title, String sub, final String key, final int max, final int def, final String[] fmt) {
+    private void rowSlider(LinearLayout c, String title, String sub, final String key, final int max, final int def, final String[] fmt) { rowSlider(c, title, sub, key, max, def, fmt, false); }
+
+    private void rowSlider(LinearLayout c, String title, String sub, final String key, final int max, final int def, final String[] fmt, final boolean pic) {
         int cur = def;
-        try { cur = Math.round(Float.parseFloat(get(key, String.valueOf(def))) * (fmt == null ? 1 : 1)); } catch (Exception ignored) { }
+        try { cur = Math.round(Float.parseFloat(pic ? pv(key, String.valueOf(def)) : get(key, String.valueOf(def)))); } catch (Exception ignored) { }
         final TextView val = text("", 15, true, accent());
         SeekBar sb = new SeekBar(this); sb.setMax(max); sb.setProgress(cur);
         final int cc = cur;
         val.setText(label(fmt, cc));
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar s, int p, boolean u) { val.setText(label(fmt, p)); }
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) { val.setText(label(fmt, p)); if (pic && u) { picEdit.put(key, String.valueOf(p)); updatePreview(); } }
             @Override public void onStartTrackingTouch(SeekBar s) { }
-            @Override public void onStopTrackingTouch(SeekBar s) { set(key, String.valueOf(s.getProgress())); }
+            @Override public void onStopTrackingTouch(SeekBar s) { if (pic) { picEdit.put(key, String.valueOf(s.getProgress())); build(); } else set(key, String.valueOf(s.getProgress())); }
         });
         sliderTile(c, row(c, title, sub, val), sb);
     }
@@ -347,12 +358,14 @@ public class MainActivity extends Activity {
 
     // ---------- frame ----------
     private void resetRefs() {
-        liveCpu = liveGpu = liveMem = liveHeat = null; liveDial = null;
+        liveCpu = liveGpu = liveMem = liveHeat = null;
         resetPageRefs();
     }
     /** Views owned by a page; the live card (left pane in wide mode) is not one of them. */
     private void resetPageRefs() {
         compileView = ocView = null;
+        ovV = new TextView[4]; ovG = new LiveGraph[3];
+        preview = null;
         graphBox = stateBox = null; graphs.clear(); gv = new TextView[6]; sv2 = new TextView[3];
         appsBox = null; appsInfo = null; progBox = null;
     }
@@ -363,7 +376,7 @@ public class MainActivity extends Activity {
     private void build() {
         int[] y = builtKey.equals(viewKey()) || builtKey.isEmpty() ? new int[]{sy(mainSv), sy(leftSv), sy(rightSv)} : new int[3];
         resetRefs();
-        mainSv = leftSv = rightSv = null; rightCol = null; entryRows.clear(); homeBody = resultsBox = null; searchBox = null;
+        barView = null; mainSv = leftSv = rightSv = null; rightCol = null; entryRows.clear(); homeBody = resultsBox = null; searchBox = null;
         Configuration cf = getResources().getConfiguration();
         wide = Layouts.wide(cf.screenWidthDp, cf.screenHeightDp);
         if (wide) buildWide(cf.screenWidthDp, cf.screenHeightDp); else buildNarrow();
@@ -385,7 +398,7 @@ public class MainActivity extends Activity {
         outer.setGravity(Gravity.CENTER_HORIZONTAL);
         col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(px(16), px(20), px(16), px(48));
+        col.setPadding(px(16), px(20), px(16), px(HOME.equals(page) ? 128 : 48));
         outer.addView(col, new LinearLayout.LayoutParams(Math.min(px(680), getResources().getDisplayMetrics().widthPixels), -2));
         sv.addView(outer);
 
@@ -416,12 +429,18 @@ public class MainActivity extends Activity {
             LinearLayout host = col; col = homeBody; pageHome(); col = host;
             onQuery();
         } else buildPage(page);
-        rootView = sv;
-        setContentView(sv);
+        if (HOME.equals(page)) {
+            FrameLayout fr = new FrameLayout(this);
+            fr.addView(sv, new FrameLayout.LayoutParams(-1, -1));
+            FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
+            fr.addView(saveBar(), bl);
+            rootView = fr; setContentView(fr);
+        } else { rootView = sv; setContentView(sv); }
     }
 
     private void buildPage(String p) {
         switch (p) {
+            case "overview": pageOverview(); break;
             case "live": pageLive(); break;
             case "perf": pagePerf(); break;
             case "oc": pageOc(); break;
@@ -439,6 +458,7 @@ public class MainActivity extends Activity {
 
     private String pageTitle(String p) {
         switch (p) {
+            case "overview": return "Overview";
             case "live": return "Live";
             case "perf": return "Performance details";
             case "oc": return "Overclock";
@@ -479,7 +499,6 @@ public class MainActivity extends Activity {
         head.addView(status);
         header.addView(head);
         header.addView(searchBar(), searchLp());
-        presetDial(true);
         col = list;
         sectionEntries();
         LinearLayout left = new LinearLayout(this);
@@ -503,19 +522,25 @@ public class MainActivity extends Activity {
         rightSv = new ScrollView(this);
         rightCol = new LinearLayout(this);
         rightCol.setOrientation(LinearLayout.VERTICAL);
-        rightCol.setPadding(px(Layouts.PANE_PAD), px(20), px(Layouts.PANE_PAD), px(48));
+        rightCol.setPadding(px(Layouts.PANE_PAD), px(20), px(Layouts.PANE_PAD), px(128));
         rightSv.addView(rightCol, new FrameLayout.LayoutParams(-1, -2));
         root.addView(rightSv, new LinearLayout.LayoutParams(0, -1, 1f));
         fillRight();
-        rootView = root;
+        FrameLayout fr = new FrameLayout(this);
+        fr.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        barView = saveBar();
+        FrameLayout.LayoutParams bl = new FrameLayout.LayoutParams(-1, -2); bl.gravity = Gravity.BOTTOM;
+        fr.addView(barView, bl);
+        barView.setVisibility("overview".equals(section) ? View.VISIBLE : View.GONE);
+        rootView = fr;
         if (!query.isEmpty()) onQuery();
-        setContentView(root);
+        setContentView(fr);
     }
 
     /** id, title, summary of the section list, in order. */
     private String[][] entries() {
         return new String[][]{
-            {"live", "Live", liveSummary()}, {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
+            {"overview", "Overview", overviewSummary()}, {"live", "Live", liveSummary()}, {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
             {"apps", "App speed", "Compile state of every app, compile or reset one"},
             {"picture", "Picture", pictureSummary()}, {"look", "Look", lookSummary()}, {"display", "Display and touch", displaySummary()},
             {"memory", "Memory and storage", memorySummary()}, {"connect", "Connections", connectSummary()},
@@ -526,7 +551,7 @@ public class MainActivity extends Activity {
     private void sectionEntries() {
         LinearLayout c = null;
         for (final String[] e : entries()) {
-            if (e[0].equals("live")) c = group("Speed"); else if (e[0].equals("picture")) c = group("Screen"); else if (e[0].equals("memory")) c = group("Device");
+            if (e[0].equals("overview")) c = group(null); else if (e[0].equals("live")) c = group("Speed"); else if (e[0].equals("picture")) c = group("Screen"); else if (e[0].equals("memory")) c = group("Device");
             final String id = e[0];
             View r = row(c, e[1], e[2], null);
             TextView sub = (TextView) ((LinearLayout) ((LinearLayout) r).getChildAt(0)).getChildAt(1);   // one line each keeps the list short
@@ -558,6 +583,7 @@ public class MainActivity extends Activity {
     }
 
     private void fillRight() {
+        if (barView != null) barView.setVisibility("overview".equals(section) ? View.VISIBLE : View.GONE);
         resetPageRefs();
         rightCol.removeAllViews();
         col = rightCol;
@@ -621,7 +647,7 @@ public class MainActivity extends Activity {
         collecting = true; col = new LinearLayout(this); cols = 1;
         try {
             for (String[] en : entries()) index.add(new String[]{en[0], en[1], en[2], ""});
-            for (String[] en : entries()) { if (en[0].equals("apps") || en[0].equals("live")) continue; collPage = en[0]; collGroup = null; col.removeAllViews(); buildPage(en[0]); }
+            for (String[] en : entries()) { if (en[0].equals("apps") || en[0].equals("live") || en[0].equals("overview")) continue; collPage = en[0]; collGroup = null; col.removeAllViews(); buildPage(en[0]); }
         } finally {
             collecting = false; col = sCol; cols = sCols;
             liveCpu = a; liveGpu = b; liveMem = c; liveHeat = d; compileView = e; ocView = f;
@@ -739,13 +765,276 @@ public class MainActivity extends Activity {
         liveHeat.setText(curTemp < 0 ? "–" : String.format(Locale.US, "%.0f °C", curTemp / 1000f));
     }
 
-    private DialView liveDial;
-    /** The clocks inside the half ring of the preset dial. */
-    private void refreshDial() {
-        if (liveDial == null) return;
-        liveDial.setLive(new String[]{ghz(curFast) + " · " + ghz(curSlow), curGpu < 0 ? "–" : (curGpu / 1000) + " MHz", curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + " °C",
-            curAvail < 0 || curTotal < 0 ? "" : String.format(Locale.US, "%.1f of %.1f GB free", curAvail / 1048576f, curTotal / 1048576f)},
-            new String[]{"CPU GHz, fast · slow", "GPU", "Chip temperature", ""});
+
+    // ---------- Overview: the last 90 seconds of the chip, the five modes, and what the chosen mode changes ----------
+    private LiveGraph[] ovG = new LiveGraph[3];
+    private TextView[] ovV = new TextView[4];
+
+    private int priC() { return sys(android.R.color.system_accent1_700, android.R.color.system_accent1_100); }
+    private int onPriC() { return sys(android.R.color.system_accent1_100, android.R.color.system_accent1_900); }
+
+    private String overviewSummary() {
+        String cur = get("preset", "balanced");
+        for (String[] pr : PRESETS) if (pr[0].equals(cur)) return pr[1] + ", " + (curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + " °C");
+        return "Custom, " + (curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + " °C");
+    }
+
+    private void pageOverview() {
+        cpuScale();
+        int fastC = accent(), slowC = tone(android.R.color.system_accent2_300, android.R.color.system_accent2_600),
+            gpuC = tone(android.R.color.system_accent3_300, android.R.color.system_accent3_600), warm = 0xFFFF8A4C;
+        int rule = (dim() & 0xFFFFFF) | 0x40000000;
+
+        // scope: four readings over one chart (CPU on a GHz scale, GPU on its own scale, temperature as a filled area)
+        LinearLayout sc = plainCard();
+        sc.setPadding(px(20), px(18), px(20), px(14));
+        LinearLayout vals = new LinearLayout(this);
+        String[] names = {"Fast cores", "Slow cores", "GPU", "Chip"};
+        int[] cs = {fastC, slowC, gpuC, warm};
+        for (int i = 0; i < 4; i++) {
+            LinearLayout cell = new LinearLayout(this); cell.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout lab = new LinearLayout(this); lab.setGravity(Gravity.CENTER_VERTICAL);
+            View dash = new View(this); GradientDrawable dg = new GradientDrawable(); dg.setColor(cs[i]); dg.setCornerRadius(px(2)); dash.setBackground(dg);
+            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(px(16), px(4)); dl.setMargins(0, 0, px(6), 0);
+            lab.addView(dash, dl); lab.addView(text(names[i], 12.5f, false, dim()));
+            ovV[i] = text("–", 26, true, ink());
+            cell.addView(lab); cell.addView(ovV[i]);
+            vals.addView(cell, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        sc.addView(vals);
+        FrameLayout fl = new FrameLayout(this);
+        for (int i = 0; i < 3; i++) { ovG[i] = new LiveGraph(this); ovG[i].setHeightDp(190); }
+        ovG[2].setup(new Hist[]{hTemp}, new int[]{warm}, 20, 90, new float[0], 85, rule, 0xAAFF5A4C, true);
+        ovG[0].setup(new Hist[]{hFast, hSlow}, new int[]{fastC, slowC}, 0, cpuMaxGhz, cpuRules, -1, rule, 0, false);
+        ovG[1].setup(new Hist[]{hGpu}, new int[]{gpuC}, 300, 900, new float[0], -1, rule, 0, false);
+        fl.addView(ovG[2], new FrameLayout.LayoutParams(-1, -2)); fl.addView(ovG[0], new FrameLayout.LayoutParams(-1, -2)); fl.addView(ovG[1], new FrameLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2); fp.setMargins(0, px(10), 0, 0);
+        sc.addView(fl, fp);
+        LinearLayout axis = new LinearLayout(this);
+        axis.addView(text("90 s ago", 12, false, dim()), new LinearLayout.LayoutParams(0, -2, 1f));
+        axis.addView(text("now", 12, false, dim()));
+        sc.addView(axis);
+        sc.setOnClickListener(v -> go("live"));
+        sc.setContentDescription("Live clocks. Opens the Live page.");
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2); sp.setMargins(0, px(12), 0, px(4));
+        col.addView(sc, sp);
+        refreshOverview();
+
+        // modes
+        String cur = get("preset", "balanced");
+        int idx = -1;
+        for (int i = 0; i < PRESETS.length; i++) if (PRESETS[i][0].equals(cur)) idx = i;
+        TextView q = text("How should it run?", wide ? 26 : 28, true, ink());
+        q.setPadding(px(6), px(22), 0, px(2)); col.addView(q);
+        TextView qs = text(idx >= 0 ? "Pick a mode. The list under it shows what it changes." : "Your own settings are active. Pick a mode to start over.", 14, false, dim());
+        qs.setPadding(px(6), 0, 0, px(10)); col.addView(qs);
+        modeCarousel(idx);
+
+        // what the mode changes, against Balanced
+        changesPanel(idx);
+        if (!wide) fineTuneGrid();
+    }
+
+    private static final int[][] METERS = {{1, 5, 1}, {3, 3, 2}, {4, 3, 3}, {5, 2, 4}, {5, 1, 5}};   // speed, battery, heat out of 5
+
+    private void modeCarousel(final int idx) {
+        final HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        String[] meterNames = {"Speed", "Battery", "Heat"};
+        final int shownIdx = idx < 0 ? PRESETS.length : idx;   // the Custom card is the sixth
+        for (int i = 0; i <= PRESETS.length; i++) {
+            final int n = i; boolean sel = i == shownIdx, custom = i == PRESETS.length;
+            LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL);
+            c.setPadding(px(20), px(18), px(20), px(18));
+            GradientDrawable g = new GradientDrawable(); g.setColor(sel ? priC() : card()); g.setCornerRadius(px(28));
+            c.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ripple()), g, null));
+            int fg = sel ? onPriC() : ink(), fg2 = sel ? onPriC() : dim();
+            LinearLayout top = new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(new GlyphView(this, custom ? "custom" : "m" + i, sel ? onAccent() : fg2, sel ? accent() : line()), new LinearLayout.LayoutParams(px(44), px(44)));
+            View sp = new View(this); top.addView(sp, new LinearLayout.LayoutParams(0, 1, 1f));
+            if (sel) {
+                TextView chip = text("✓ In use", 12, true, onAccent());
+                GradientDrawable cg = new GradientDrawable(); cg.setColor(accent()); cg.setCornerRadius(px(14)); chip.setBackground(cg); chip.setPadding(px(10), px(3), px(10), px(3));
+                top.addView(chip);
+            }
+            c.addView(top, new LinearLayout.LayoutParams(-1, -2));
+            String ap = get("profile_active", ""), pb = get("profile_base", "");
+            TextView nm = text(custom ? "Custom" : PRESETS[i][1], 22, true, fg); nm.setPadding(0, px(12), 0, 0); c.addView(nm);
+            String desc = custom ? (!ap.isEmpty() ? "Profile \u201c" + Profiles.shown(ap) + "\u201d is in use." : !pb.isEmpty() ? "Based on \u201c" + Profiles.shown(pb) + "\u201d, changed." : "Your own settings and your saved profiles.") : PRESETS[i][2];
+            TextView ds = text(desc, 13, false, fg2); ds.setMinLines(4); ds.setPadding(0, px(4), 0, px(10)); c.addView(ds);
+            if (custom) {
+                String[] ps = get("profiles", "").split(","); int cnt = 0; for (String q : ps) if (!q.isEmpty()) cnt++;
+                LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
+                c.addView(text(cnt == 0 ? "No saved profiles yet" : cnt + (cnt == 1 ? " saved profile" : " saved profiles"), 13, true, fg), ml);
+                c.addView(text("Tap to open the list", 12.5f, false, fg2), ml);
+            } else for (int m = 0; m < 3; m++) {
+                LinearLayout mr = new LinearLayout(this); mr.setGravity(Gravity.CENTER_VERTICAL);
+                mr.addView(text(meterNames[m], 12.5f, false, fg2), new LinearLayout.LayoutParams(0, -2, 1f));
+                for (int k = 0; k < 5; k++) {
+                    View seg = new View(this); GradientDrawable sg = new GradientDrawable(); sg.setCornerRadius(px(3));
+                    sg.setColor(k < METERS[i][m] ? (m == 2 ? 0xFFFF8A4C : (sel ? onPriC() : accent())) : (sel ? (onPriC() & 0xFFFFFF) | 0x44000000 : line()));
+                    seg.setBackground(sg);
+                    LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(px(16), px(6)); sl.setMargins(px(3), 0, 0, 0);
+                    mr.addView(seg, sl);
+                }
+                LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-1, -2); ml.setMargins(0, px(6), 0, 0);
+                c.addView(mr, ml);
+            }
+            c.setOnClickListener(v -> { if (custom) showProfilesSheet(); else if (n != idx) { set("preset", PRESETS[n][0]); build(); } });
+            c.setContentDescription((custom ? "Custom. " + desc : PRESETS[i][1] + ". " + PRESETS[i][2]) + (sel ? " In use." : ""));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(220), -2); lp.setMargins(0, 0, px(10), 0);
+            row.addView(c, lp);
+        }
+        hs.addView(row);
+        col.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+        if (shownIdx > 1) hs.post(() -> hs.scrollTo(Math.max(0, (shownIdx - 1) * px(230)), 0));
+    }
+
+    /** The saved profiles in a sheet from the bottom: tap to apply, Delete, update the one in use, save the current settings. */
+    private void showProfilesSheet() {
+        final android.app.Dialog d = new android.app.Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(sys(android.R.color.system_neutral1_800, android.R.color.system_neutral1_50)); bg.setCornerRadii(new float[]{px(28), px(28), px(28), px(28), 0, 0, 0, 0});
+        box.setBackground(bg); box.setPadding(px(8), px(20), px(8), px(24));
+        TextView title = text("Profiles", 22, true, ink()); title.setPadding(px(20), 0, 0, px(8)); box.addView(title);
+        LinearLayout list = newCard(); box.addView(list, new LinearLayout.LayoutParams(-1, -2));
+        String active = get("profile_active", "");
+        row(list, "Save current settings\u2026", "Keeps performance, memory and picture settings under a name", text("＋", 22, true, accent())).setOnClickListener(v -> { d.dismiss(); askSaveProfile(); });
+        if (canUpdateProfile()) {
+            final String base = get("profile_base", "");
+            row(list, "Update \u201c" + Profiles.shown(base) + "\u201d", "Overwrites the saved profile with the current settings", text("Update", 15, true, accent()))
+                .setOnClickListener(v -> { d.dismiss(); set("update_profile", base); st.put("profile_active", base); build(); });
+        }
+        for (final String n : get("profiles", "").split(",")) {
+            if (n.isEmpty()) continue;
+            final String shown = Profiles.shown(n);
+            TextView del = text("Delete", 14, true, accent());
+            del.setPadding(px(12), px(8), px(4), px(8)); del.setMinHeight(px(48)); del.setMinWidth(px(48)); del.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+            del.setOnClickListener(v -> new AlertDialog.Builder(this).setMessage("Delete the profile \"" + shown + "\"?")
+                .setNegativeButton("Cancel", null).setPositiveButton("Delete", (dd, w) -> { d.dismiss(); set("delete_profile", n); }).show());
+            row(list, n.equals(active) ? shown + "  \u2713" : shown, n.equals(active) ? "In use" : "Tap to apply", del).setOnClickListener(v -> { d.dismiss(); set("apply_profile", n); });
+        }
+        d.setContentView(box);
+        android.view.Window w = d.getWindow();
+        if (w != null) { w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0)); w.setGravity(Gravity.BOTTOM); w.setLayout(Math.min(px(680), getResources().getDisplayMetrics().widthPixels), -2); }
+        d.show();
+    }
+
+    /** The bar under the overview: what is in use, and one button to keep it as a profile. */
+    private View saveBar() {
+        LinearLayout bar = new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable g = new GradientDrawable(); g.setColor(sys(android.R.color.system_neutral1_800, android.R.color.system_neutral1_50)); g.setCornerRadii(new float[]{px(28), px(28), px(28), px(28), 0, 0, 0, 0});
+        bar.setBackground(g); bar.setElevation(px(8));
+        bar.setPadding(px(24), px(14), px(20), px(14));
+        String ap = get("profile_active", ""), pb = get("profile_base", ""), cur = get("preset", "balanced"), t, sub;
+        if (!ap.isEmpty()) { t = "Profile \u201c" + Profiles.shown(ap) + "\u201d in use"; sub = "No changes"; }
+        else if (!pb.isEmpty() && canUpdateProfile()) { t = "Profile \u201c" + Profiles.shown(pb) + "\u201d in use"; sub = "Changed since you applied it"; }
+        else { t = "Custom settings"; sub = "Not saved as a profile"; for (String[] pr : PRESETS) if (pr[0].equals(cur)) { t = pr[1] + " mode"; sub = "Keep these settings as a profile"; } }
+        LinearLayout texts = new LinearLayout(this); texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(text(t, 17, true, ink())); texts.addView(text(sub, 13.5f, false, dim()));
+        bar.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (!ap.isEmpty()) return bar;   // the profile in use matches the settings: nothing to save
+        TextView b = text("Save as profile", 16, true, onAccent()); b.setGravity(Gravity.CENTER); b.setMinHeight(px(52)); b.setPadding(px(26), 0, px(26), 0);
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(accent()); bg.setCornerRadius(px(26)); b.setBackground(bg);
+        b.setOnClickListener(v -> {
+            if (canUpdateProfile()) {
+                final String base = get("profile_base", "");
+                new AlertDialog.Builder(this).setItems(new String[]{"Update \u201c" + Profiles.shown(base) + "\u201d", "Save as a new profile\u2026"}, (d, i) -> {
+                    if (i == 0) { set("update_profile", base); st.put("profile_active", base); build(); } else askSaveProfile();
+                }).show();
+            } else askSaveProfile();
+        });
+        bar.addView(b);
+        return bar;
+    }
+
+    private void fineTuneGrid() {
+        TextView h = text("Fine tune", 14, true, accent()); h.setPadding(px(20), px(24), 0, px(8)); col.addView(h);
+        String[][] t = {{"live", "Live", liveSummary()}, {"perf", "Performance", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"apps", "App speed", "Compile state of every app"},
+            {"picture", "Picture", pictureSummary()}, {"look", "Look", lookSummary()}, {"display", "Display and touch", displaySummary()},
+            {"memory", "Memory and storage", memorySummary()}, {"connect", "Connections", connectSummary()}, {"system", "System", get("status", "Shortcuts, logging, restart")}};
+        for (int i = 0; i < t.length; i += 2) {
+            LinearLayout r = new LinearLayout(this); r.setBaselineAligned(false);
+            for (int k = 0; k < 2; k++) {
+                final String[] e = t[i + k];
+                LinearLayout tile = new LinearLayout(this); tile.setGravity(Gravity.CENTER_VERTICAL);
+                tile.setPadding(px(18), px(14), px(14), px(14)); tile.setMinimumHeight(px(84));
+                GradientDrawable g = new GradientDrawable(); g.setColor(card()); g.setCornerRadius(px(24));
+                tile.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(ripple()), g, null));
+                tile.addView(new GlyphView(this, e[0].equals("live") ? "live" : e[0], onSecContainer(), secContainer()), new LinearLayout.LayoutParams(px(46), px(46)));
+                LinearLayout tx = new LinearLayout(this); tx.setOrientation(LinearLayout.VERTICAL); tx.setPadding(px(14), 0, 0, 0);
+                tx.addView(text(e[1], 16, true, ink()));
+                TextView sm = text(e[2], 13, false, dim()); sm.setSingleLine(true); sm.setEllipsize(android.text.TextUtils.TruncateAt.END); tx.addView(sm);
+                tile.addView(tx, new LinearLayout.LayoutParams(0, -2, 1f));
+                tile.setOnClickListener(v -> go(e[0]));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f); lp.setMargins(k == 0 ? 0 : px(4), 0, k == 0 ? px(4) : 0, px(8));
+                r.addView(tile, lp);
+            }
+            col.addView(r, new LinearLayout.LayoutParams(-1, -2));
+        }
+    }
+
+    // key, Balanced value; the daemon's Balanced preset is the baseline the other modes are compared with
+    private static final String[][] BASE = {{"gpu_freq", "680000"}, {"oc", "0"}, {"governor", "schedplus"}, {"thermal", "stock"}, {"fg_boost", "auto"}, {"ta_boost", "0"},
+        {"cap_big", "-1"}, {"cap_little", "-1"}, {"dirty", "1"}, {"swappiness", "100"}, {"extra_free", "49152"}};
+
+    private static String keyLabel(String k) {
+        switch (k) {
+            case "gpu_freq": return "GPU clock"; case "oc": return "Max clocks"; case "governor": return "CPU governor"; case "thermal": return "Thermal limit";
+            case "fg_boost": return "App boost"; case "ta_boost": return "Top app boost"; case "cap_big": return "Fast cores, top speed"; case "cap_little": return "Slow cores, top speed";
+            case "dirty": return "Write buffer"; case "swappiness": return "Swappiness"; default: return "Free memory reserve";
+        }
+    }
+    private static String keyValue(String k, String v) {
+        try {
+            switch (k) {
+                case "gpu_freq": return "0".equals(v) ? "Auto" : (Integer.parseInt(v) / 1000) + " MHz";
+                case "oc": return "1".equals(v) ? "On" : "Off";
+                case "thermal": return "off".equals(v) ? "Off" : "Stock";
+                case "cap_big": case "cap_little": return "-1".equals(v) ? "No limit" : String.format(Locale.US, "%.2f GHz", Integer.parseInt(v) / 1e6);
+                case "dirty": return v + " %";
+                case "extra_free": return (Integer.parseInt(v) / 1024) + " MB";
+                default: return v.isEmpty() ? v : v.substring(0, 1).toUpperCase(Locale.US) + v.substring(1);
+            }
+        } catch (NumberFormatException e) { return v; }
+    }
+
+    private void changesPanel(int idx) {
+        LinearLayout p = plainCard();
+        p.setPadding(px(22), px(18), px(22), px(10));
+        ArrayList<String[]> diff = new ArrayList<>();
+        for (String[] b : BASE) { String c = get(b[0], b[1]); if (!c.equals(b[1])) diff.add(new String[]{keyLabel(b[0]), keyValue(b[0], b[1]), keyValue(b[0], c)}); }
+        boolean base = idx == 1 && diff.isEmpty();
+        LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(text(base ? "Balanced is the baseline" : (idx >= 0 ? PRESETS[idx][1] : "Your settings") + " changes", 18, true, ink()));
+        if (!base) { TextView sm = text("compared with Balanced", 13, false, dim()); sm.setPadding(px(12), 0, 0, 0); head.addView(sm); }
+        p.addView(head);
+        if (diff.isEmpty()) {
+            TextView t = text(base ? "Everything is at the everyday defaults. Pick another mode and this list shows what it changes." : "Nothing differs from Balanced.", 14, false, dim());
+            t.setPadding(0, px(8), 0, px(10)); p.addView(t);
+        }
+        for (String[] d : diff) {
+            LinearLayout r = new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL); r.setMinimumHeight(px(48));
+            r.addView(text(d[0], 15, false, dim()), new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView o = text(d[1], 14, false, dim()); o.setPaintFlags(o.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+            r.addView(o);
+            TextView ar = text("  →  ", 14, false, dim()); r.addView(ar);
+            TextView nw = text(d[2], 15, true, accent()); nw.setMinWidth(px(110)); r.addView(nw);
+            p.addView(r, new LinearLayout.LayoutParams(-1, -2));
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, px(12), 0, px(4));
+        col.addView(p, lp);
+    }
+
+    private void refreshOverview() {
+        if (ovV[0] == null) return;
+        ovV[0].setText(ghz(curFast)); ovV[1].setText(ghz(curSlow));
+        ovV[2].setText(curGpu < 0 ? "–" : String.valueOf(curGpu / 1000));
+        ovV[3].setText(curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + "°");
+        if (ovG[1] != null) ovG[1].setRange(300, Math.max(900f, hGpu.max() + 50), new float[0]);
+        for (LiveGraph g : ovG) if (g != null) g.invalidate();
     }
 
     private String liveSummary() {
@@ -1012,52 +1301,8 @@ public class MainActivity extends Activity {
     }
 
     // ---------- home ----------
-    /** The preset dial with the name and one line about the preset; compact in the left pane of the wide layout. */
-    private void presetDial(boolean compact) {
-        String cur = get("preset", "balanced");
-        int idx = -1;
-        String[] names = new String[PRESETS.length];
-        for (int i = 0; i < PRESETS.length; i++) { names[i] = PRESETS[i][1]; if (PRESETS[i][0].equals(cur)) idx = i; }
-        LinearLayout hero = plainCard();
-        hero.setPadding(px(8), px(10), px(8), px(10));
-        DialView d = new DialView(this);
-        d.setColors(accent(), sys(android.R.color.system_neutral2_600, android.R.color.system_neutral2_300), ink(), dim(), onAccent(), 0xFFFF8A4C);
-        d.setItems(names);
-        if (compact) d.setMaxRadius(130);
-        d.setSelected(idx);
-        d.setOnPick(i -> { set("preset", PRESETS[i][0]); build(); });
-        liveDial = d; refreshDial();
-        hero.addView(d, new LinearLayout.LayoutParams(-1, -2));
-        String ap = get("profile_active", "");
-        TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), compact ? 28 : 34, true, ink());
-        name.setGravity(Gravity.CENTER); name.setPadding(0, px(compact ? 4 : 8), 0, px(4));
-        hero.addView(name, new LinearLayout.LayoutParams(-1, -2));
-        boolean upd = idx < 0 && canUpdateProfile();
-        TextView desc = text(idx >= 0 ? PRESETS[idx][2] : upd ? "Based on " + Profiles.shown(get("profile_base", "")) + ", changed. Save the changes or pick a preset." : ap.isEmpty() ? "You changed individual settings. Pick a preset on the dial to start over, or save these as a profile" + (compact ? "." : " below.") : "Your saved profile. Pick a preset on the dial to leave it.", compact ? 14 : 15, false, dim());
-        desc.setGravity(Gravity.CENTER); desc.setPadding(px(compact ? 8 : 24), 0, px(compact ? 8 : 24), px(compact ? 12 : 10));
-        hero.addView(desc, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2); hp.setMargins(0, px(10), 0, px(4));
-        col.addView(hero, hp);
-        if (canUpdateProfile()) updateProfileRow(group(null));
-    }
-
     // ---------- home ----------
-    private void pageHome() {
-        presetDial(false);
-        LinearLayout c = group("Speed");
-        rowGo(c, "Live", liveSummary(), "live");
-        rowGo(c, "Performance details", perfSummary(), "perf");
-        rowGo(c, "Overclock", ocSummary(), "oc");
-        profileRows(c);
-        c = group("Screen");
-        rowGo(c, "Picture", pictureSummary(), "picture");
-        rowGo(c, "Look", lookSummary(), "look");
-        rowGo(c, "Display and touch", displaySummary(), "display");
-        c = group("Device");
-        rowGo(c, "Memory and storage", memorySummary(), "memory");
-        rowGo(c, "Connections", connectSummary(), "connect");
-        rowGo(c, "System", get("status", "Shortcuts, logging, restart"), "system");
-    }
+    private void pageHome() { pageOverview(); }
 
     private String memorySummary() {
         return "Read-ahead " + pick(get("readahead", "512"), new String[]{"128", "256", "512", "1024", "2048"}, new String[]{"128 KB", "256 KB", "512 KB", "1 MB", "2 MB"}, get("readahead", "512") + " KB") + ", swappiness " + get("swappiness", "100");
@@ -1108,17 +1353,19 @@ public class MainActivity extends Activity {
                 .setOnClickListener(v -> { set("apply_profile", n); });
         }
         row(c, "Save current settings as a profile", "Keeps performance, memory and picture settings under a name", text("Save", 15, true, accent()))
-            .setOnClickListener(v -> {
-                final EditText name = new EditText(this);
-                name.setHint("Profile name"); name.setSingleLine(true); name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(24)});
-                name.setPadding(px(24), px(16), px(24), px(8));
-                new AlertDialog.Builder(this).setTitle("Save profile").setView(name).setNegativeButton("Cancel", null)
-                    .setPositiveButton("Save", (d, w) -> {
-                        String n = name.getText().toString().trim().replaceAll("[^A-Za-z0-9]+", "_").replaceAll("^_+|_+$", "");
-                        if (n.isEmpty()) { Toast.makeText(this, "Use letters or numbers in the name", Toast.LENGTH_SHORT).show(); return; }
-                        set("save_profile", n);
-                    }).show();
-            });
+            .setOnClickListener(v -> askSaveProfile());
+    }
+
+    private void askSaveProfile() {
+        final EditText name = new EditText(this);
+        name.setHint("Profile name"); name.setSingleLine(true); name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(24)});
+        name.setPadding(px(24), px(16), px(24), px(8));
+        new AlertDialog.Builder(this).setTitle("Save profile").setView(name).setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", (d, w) -> {
+                String n = name.getText().toString().trim().replaceAll("[^A-Za-z0-9]+", "_").replaceAll("^_+|_+$", "");
+                if (n.isEmpty()) { Toast.makeText(this, "Use letters or numbers in the name", Toast.LENGTH_SHORT).show(); return; }
+                set("save_profile", n);
+            }).show();
     }
 
     private String perfSummary() {
@@ -1261,9 +1508,70 @@ public class MainActivity extends Activity {
             new String[]{"System default", "16", "24", "32", "48"}, new String[]{"default", "16", "24", "32", "48"}, "default");
     }
 
+    // Picture edits wait here until Apply, so the engine restarts once; the preview shows them at once.
+    private final java.util.HashMap<String, String> picEdit = new java.util.HashMap<>();
+    private PicPreview preview;
+
+    private String pv(String k, String def) { return picEdit.containsKey(k) ? picEdit.get(k) : get(k, def); }
+
+    private android.graphics.Bitmap photo;
+    private boolean photoAsked;
+
+    /** The wallpaper copy the daemon puts in files/preview.jpg (asked for once); until it is there the preview draws its own scene. */
+    private void loadPhoto() {
+        java.io.File f = new java.io.File(getFilesDir(), "preview.jpg");
+        if (photo == null && f.exists()) {
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inJustDecodeBounds = true; android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+            o.inSampleSize = Math.max(1, Math.min(o.outWidth, o.outHeight) / 700); o.inJustDecodeBounds = false;
+            photo = android.graphics.BitmapFactory.decodeFile(f.getPath(), o);
+        }
+        if (photo != null) { preview.setPhoto(photo); return; }
+        if (!photoAsked) {
+            photoAsked = true; Cfg.request(this, "preview_photo", "1");
+            ui.postDelayed(() -> { if (preview != null && "picture".equals(cur())) build(); }, 3000);
+        }
+    }
+
+    private void updatePreview() {
+        if (preview == null) return;
+        float cNow = PicMath.contrast(PicMath.effective(get("pq_mode", "0"), get("pq_contrast", "4"))), cNew = PicMath.contrast(PicMath.effective(pv("pq_mode", "0"), pv("pq_contrast", "4")));
+        float sNow = PicMath.saturation(PicMath.effective(get("pq_mode", "0"), get("pq_sat", "4"))), sNew = PicMath.saturation(PicMath.effective(pv("pq_mode", "0"), pv("pq_sat", "4")));
+        preview.set(PicMath.rel(cNow, cNew), PicMath.rel(sNow, sNew), ink(), dim());
+    }
+
+    private void applyPicture() {
+        for (java.util.Map.Entry<String, String> e : picEdit.entrySet()) put(e.getKey(), e.getValue());
+        picEdit.clear();
+        setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 6000);
+        build();
+    }
+
     private void pagePicture() {
-        TextView hint = text("MediaTek's picture engine (MiraVision). Every change restarts it, which takes a few seconds and can flicker the screen once. This tablet has no dynamic contrast, HDR or ultra resolution hardware, so those switches are gone. Contrast, saturation, gamma and sharpness only act in Custom mode. The numbers are MediaTek indexes: judge them by eye on a grey ramp.", 13.5f, false, dim());
+        TextView hint = text("MediaTek's picture engine (MiraVision). Changes wait until you press Apply, then it restarts once, which takes a few seconds and can flicker the screen. This tablet has no dynamic contrast, HDR or ultra resolution hardware, so those switches are gone. Contrast, saturation, gamma and sharpness only act in Custom mode. The numbers are MediaTek indexes: judge them by eye on a grey ramp.", 13.5f, false, dim());
         hint.setPadding(px(10), px(6), px(10), 0); col.addView(hint);
+
+        LinearLayout pc = plainCard(); pc.setPadding(px(14), px(14), px(14), px(10));
+        preview = new PicPreview(this); updatePreview(); loadPhoto();
+        pc.addView(preview, new LinearLayout.LayoutParams(-1, -2));
+        TextView cap = text("Your wallpaper. An estimate for contrast and saturation. Left: your screen now. Right: with the changes below. Gamma and sharpness are not shown.", 12.5f, false, dim());
+        cap.setPadding(px(6), px(8), px(6), 0); pc.addView(cap);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2); pp.setMargins(0, px(10), 0, px(4));
+        col.addView(pc, pp);
+        if (!picEdit.isEmpty()) {
+            LinearLayout ab = new LinearLayout(this); ab.setGravity(Gravity.CENTER_VERTICAL);
+            GradientDrawable abg = new GradientDrawable(); abg.setColor(priC()); abg.setCornerRadius(px(28)); ab.setBackground(abg);
+            ab.setPadding(px(22), px(12), px(14), px(12));
+            ab.addView(text(picEdit.size() + (picEdit.size() == 1 ? " change" : " changes") + " not applied", 16, true, onPriC()), new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView dis = text("Discard", 15, true, onPriC()); dis.setPadding(px(16), px(10), px(16), px(10)); dis.setMinHeight(px(48)); dis.setGravity(Gravity.CENTER);
+            dis.setOnClickListener(v -> { picEdit.clear(); build(); });
+            TextView ap = text("Apply", 15, true, onAccent()); ap.setPadding(px(24), px(10), px(24), px(10)); ap.setMinHeight(px(48)); ap.setGravity(Gravity.CENTER);
+            GradientDrawable apg = new GradientDrawable(); apg.setColor(accent()); apg.setCornerRadius(px(24)); ap.setBackground(apg);
+            ap.setOnClickListener(v -> applyPicture());
+            ab.addView(dis); ab.addView(ap);
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, -2); alp.setMargins(0, px(6), 0, px(4));
+            col.addView(ab, alp);
+        }
         LinearLayout c = group("Engine");
         row(c, "Picture engine", "Service, mode and the values it logged when it last set the display", text(pqLive(), 14, true, accent()));
         c = group("Quick looks");
@@ -1273,18 +1581,19 @@ public class MainActivity extends Activity {
             {"Punchy", "Custom, more contrast and colour, a little sharpening. Can look harsh.", "pq_mode=2 pq_contrast=6 pq_sat=6 pq_gamma=7 pq_shp=3"}};
         for (final String[] l : looks) {
             row(c, l[0], l[1], text("Apply", 15, true, accent())).setOnClickListener(v -> {
-                for (String kv : l[2].split(" ")) { String[] p = kv.split("="); st.put(p[0], p[1]); Cfg.request(this, p[0], p[1]); }
-                setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 5000);
+                picEdit.clear();
+                for (String kv : l[2].split(" ")) { String[] p = kv.split("="); put(p[0], p[1]); }
+                setStatus("Applying…"); ui.removeCallbacks(reload); ui.postDelayed(reload, 6000);
             });
         }
         c = group("Fine control");
-        rowChoice(c, "Picture mode", "Custom uses the sliders below", "pq_mode", new String[]{"Factory", "Custom"}, new String[]{"0", "2"}, "0");
+        rowChoice(c, "Picture mode", "Custom uses the sliders below", "pq_mode", new String[]{"Factory", "Custom"}, new String[]{"0", "2"}, "0", true);
         String[] ten = {"0", "1", "2", "3", "4 (neutral)", "5", "6", "7", "8", "9"};
-        rowSlider(c, "Contrast", "Screen contrast, 4 is neutral", "pq_contrast", 9, 4, ten);
-        rowSlider(c, "Saturation", "Screen colour strength, 4 is neutral", "pq_sat", 9, 4, ten);
-        rowSlider(c, "Gamma", "Mid-tone curve, 0 to 14, 7 is neutral", "pq_gamma", 14, 7, new String[]{"0", "1", "2", "3", "4", "5", "6", "7 (neutral)", "8", "9", "10", "11", "12", "13", "14"});
-        rowSlider(c, "Sharpness", "0 to 11, 2 is the factory value", "pq_shp", 11, 2, null);
-        rowChoice(c, "Video colour index", "MediaTek video colour index. Effect not verified on this tablet", "pq_color", new String[]{"0", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0");
+        rowSlider(c, "Contrast", "Screen contrast, 4 is neutral", "pq_contrast", 9, 4, ten, true);
+        rowSlider(c, "Saturation", "Screen colour strength, 4 is neutral", "pq_sat", 9, 4, ten, true);
+        rowSlider(c, "Gamma", "Mid-tone curve, 0 to 14, 7 is neutral", "pq_gamma", 14, 7, new String[]{"0", "1", "2", "3", "4", "5", "6", "7 (neutral)", "8", "9", "10", "11", "12", "13", "14"}, true);
+        rowSlider(c, "Sharpness", "0 to 11, 2 is the factory value", "pq_shp", 11, 2, null, true);
+        rowChoice(c, "Video colour index", "MediaTek video colour index. Effect not verified on this tablet", "pq_color", new String[]{"0", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0", true);
     }
 
     /** The daemon's pq_live line: "running,mode2,gsat4,cont6,bri4" or "...,nolog" when the log is off. */
@@ -1316,7 +1625,7 @@ public class MainActivity extends Activity {
             chip.setContentDescription(cc[1]);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(38), px(38));
             lp.setMargins(px(5), px(6), px(5), px(6));
-            chip.setOnClickListener(v -> { st.put("palette_source", "preset"); Cfg.request(this, "palette_source", "preset"); set("accent", cc[0]); build(); });
+            chip.setOnClickListener(v -> { put("palette_source", "preset"); set("accent", cc[0]); build(); });
             chips.addView(chip, lp);
         }
         HorizontalScrollView hs = new HorizontalScrollView(this);

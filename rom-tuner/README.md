@@ -236,6 +236,15 @@ The home screen and the section list are grouped by task: Speed (performance det
 
 The search index is not a hand written list: the first search builds every page (except the app list) into a scratch column and records each row, so it follows the pages as they change. The matching and ranking are in `src/org/tablet/tuner/Search.java`, tested by `tests/SearchTest.java` (run by `sh tests/test_apps.sh`). Rows within a card are now separated by a 2 dp gap in the page colour instead of a hairline, and the cards and titles are a little larger.
 
+### Home (Overview)
+
+The home screen is the Overview. Top to bottom: the search box, a live graph of the last 90 seconds (CPU fast and slow cores, GPU, chip temperature), "How should it run?" with six cards, a panel listing what the chosen mode changes compared with Balanced, a Fine tune grid of area tiles, and a bar at the bottom. In two panes the Overview is the first section and the grid is not shown (the left list does that job).
+
+- The five mode cards (Battery, Balanced, Smooth, Performance, Extreme) have a drawn icon (`GlyphView`, no image files) and Speed, Battery and Heat meters. The sixth card, Custom, is lit when the settings are not one of the modes. It shows the profile in use; tapping it opens a sheet with the saved profiles (tap to apply, Delete, Save current settings, and Update when the profile in use was changed).
+- The bottom bar says which profile is in use and whether it changed (the app cannot read the profile values, only whether the daemon cleared `profile_active`, so it cannot count the changes). The Save as profile button is only there when there is something to save.
+- Picture edits wait for Apply. A preview shows the wallpaper in two halves: the left as the display looks now, the right with the extra contrast and saturation the pending sliders would add (an estimate, `PicMath.java`; gamma and sharpness are not shown). The daemon copies the wallpaper to `files/preview.jpg` on the `preview_photo` request, because the app cannot read the system's wallpaper file; until then a drawn scene is used.
+- A value changed in the app is kept for 12 seconds over the published state (`Pending.java`). Before, a read 2.5 seconds after a change brought back the old number, because the picture engine needs about 4 seconds to restart and publish.
+
 ### Look (Material 3)
 
 Lists are segmented: each setting is its own tile on a `surface container` tone, with large (28 dp) corners on the outside of a group and small (6 dp) corners between tiles, 2 dp apart, and a ripple on press. In two panes the selected section is a secondary container tile. The preset dial, its name and the clocks sit in one hero card. Colours are the system palette (`system_accent*`, `system_neutral*`), so they follow the wallpaper and light or dark mode. The search box and the Graphs and State tabs are fully rounded; the back button is a 48 dp circle. Row descriptions are 14 sp.
