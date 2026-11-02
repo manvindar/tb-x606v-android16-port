@@ -336,21 +336,22 @@ pq_live() {
 # saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory, picture and overclock keys (oc_master, oc_cpu_uv, oc_gpu), not the look. A profile saved before the overclock keys existed leaves the overclock as it is when applied; one that has them switches it on or off and the crash and thermal guards still apply.
 PF=/data/local/tmp/tuner.profiles
 PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
-pf_line() { while IFS= read -r l_; do [ "${l_%%|*}" = "$1" ] && { echo "$l_"; return 0; }; done < $PF 2>/dev/null; return 1; }   # exact name match (no regex), prints the line
+# a bare | in a ${%%} pattern is alternation in the device's mksh (it matched the whole line), so it is escaped below
+pf_line() { while IFS= read -r l_; do [ "${l_%%\|*}" = "$1" ] && { echo "$l_"; return 0; }; done < $PF 2>/dev/null; return 1; }   # exact name match (no regex), prints the line
 profile_save() {   # $1 name; an existing profile of that name is replaced in place, a new one goes last
   line="$1|"; for k in $PKEYS; do eval x=\$$k; [ -n "$x" ] && line="$line$k=$x "; done
   : > $PF.t; d=0
   if [ -f $PF ]; then while IFS= read -r l_; do
     [ -z "$l_" ] && continue
-    if [ "${l_%%|*}" = "$1" ]; then [ $d = 0 ] && echo "$line" >> $PF.t; d=1; else echo "$l_" >> $PF.t; fi
+    if [ "${l_%%\|*}" = "$1" ]; then [ $d = 0 ] && echo "$line" >> $PF.t; d=1; else echo "$l_" >> $PF.t; fi
   done < $PF; fi
   [ $d = 1 ] || echo "$line" >> $PF.t
   mv $PF.t $PF; log "saved profile $1"
 }
-profile_delete() { [ -f $PF ] && { while IFS= read -r l_; do [ -n "$l_" ] && [ "${l_%%|*}" != "$1" ] && echo "$l_"; done < $PF > $PF.t; mv $PF.t $PF; log "deleted profile $1"; }; }
+profile_delete() { [ -f $PF ] && { while IFS= read -r l_; do [ -n "$l_" ] && [ "${l_%%\|*}" != "$1" ] && echo "$l_"; done < $PF > $PF.t; mv $PF.t $PF; log "deleted profile $1"; }; }
 profile_apply() {  # $1 name -> state keys. profile_base remembers where the settings came from; it survives edits (profile_active is cleared by those)
   l=$(pf_line "$1"); [ -z "$l" ] && { log "no profile $1"; return 1; }
-  for kv in ${l#*|}; do putkey ${kv%%=*} ${kv#*=}; done
+  for kv in ${l#*\|}; do putkey ${kv%%=*} ${kv#*=}; done
   putkey preset custom; putkey profile_active "$1"; putkey profile_base "$1"; log "applied profile $1"
 }
 cpm() { case $1 in 0) echo 'Default(Normal) mode';; 1) echo 'Low Power mode';; 2) echo 'Just Make mode';; 3) echo 'Performance(Sports) mode';; esac; }

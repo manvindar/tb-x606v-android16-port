@@ -34,7 +34,7 @@ public class MainActivity extends Activity {
     private boolean night;
     private float dp;
     private String page = HOME;                         // narrow layout: the page on screen
-    private String section = "perf";                    // two pane layout: the section in the right pane
+    private String section = "live";                    // two pane layout: the section in the right pane
     private boolean wide;                               // layout mode of the tree built last
     private int cols = 1, appsCols = 1;                 // columns for setting cards and for app rows
     private ScrollView mainSv, leftSv, rightSv;
@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView liveCpu, liveGpu, liveMem, liveHeat, compileView, ocView;
     private final android.os.Handler ui = new android.os.Handler();
-    private final Runnable tick = new Runnable() { @Override public void run() { refreshLive(); refreshCompile(); refreshProgress(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
+    private final Runnable tick = new Runnable() { @Override public void run() { sample(); refreshLive(); refreshDial(); refreshGraphs(); refreshCompile(); refreshProgress(); refreshOc(); refreshApps(); ui.postDelayed(this, 1000); } };
     private final Runnable reload = () -> { st = Cfg.load(this); setStatus("Applied"); build(); };
 
     // preset id, name, one-line description
@@ -301,12 +301,13 @@ public class MainActivity extends Activity {
 
     // ---------- frame ----------
     private void resetRefs() {
-        liveCpu = liveGpu = liveMem = liveHeat = null;
+        liveCpu = liveGpu = liveMem = liveHeat = null; liveDial = null;
         resetPageRefs();
     }
     /** Views owned by a page; the live card (left pane in wide mode) is not one of them. */
     private void resetPageRefs() {
         compileView = ocView = null;
+        graphBox = stateBox = null; graphs.clear(); gv = new TextView[6]; sv2 = new TextView[3];
         appsBox = null; appsInfo = null; progBox = null;
     }
 
@@ -372,6 +373,7 @@ public class MainActivity extends Activity {
 
     private void buildPage(String p) {
         switch (p) {
+            case "live": pageLive(); break;
             case "perf": pagePerf(); break;
             case "oc": pageOc(); break;
             case "profiles": pageProfiles(); break;
@@ -388,6 +390,7 @@ public class MainActivity extends Activity {
 
     private String pageTitle(String p) {
         switch (p) {
+            case "live": return "Live";
             case "perf": return "Performance details";
             case "oc": return "Overclock";
             case "profiles": return "Profiles";
@@ -428,7 +431,6 @@ public class MainActivity extends Activity {
         header.addView(head);
         header.addView(searchBar(), searchLp());
         presetDial(true);
-        liveCard(true);
         col = list;
         sectionEntries();
         LinearLayout left = new LinearLayout(this);
@@ -464,7 +466,7 @@ public class MainActivity extends Activity {
     /** id, title, summary of the section list, in order. */
     private String[][] entries() {
         return new String[][]{
-            {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
+            {"live", "Live", liveSummary()}, {"perf", "Performance details", perfSummary()}, {"oc", "Overclock", ocSummary()}, {"profiles", "Profiles", profileSummary()},
             {"apps", "App speed", "Compile state of every app, compile or reset one"},
             {"picture", "Picture", pictureSummary()}, {"look", "Look", lookSummary()}, {"display", "Display and touch", displaySummary()},
             {"memory", "Memory and storage", memorySummary()}, {"connect", "Connections", connectSummary()},
@@ -475,7 +477,7 @@ public class MainActivity extends Activity {
     private void sectionEntries() {
         LinearLayout c = null;
         for (final String[] e : entries()) {
-            if (e[0].equals("perf")) c = group("Speed"); else if (e[0].equals("picture")) c = group("Screen"); else if (e[0].equals("memory")) c = group("Device");
+            if (e[0].equals("live")) c = group("Speed"); else if (e[0].equals("picture")) c = group("Screen"); else if (e[0].equals("memory")) c = group("Device");
             final String id = e[0];
             View r = row(c, e[1], e[2], null);
             TextView sub = (TextView) ((LinearLayout) ((LinearLayout) r).getChildAt(0)).getChildAt(1);   // one line each keeps the list short
@@ -571,7 +573,7 @@ public class MainActivity extends Activity {
         collecting = true; col = new LinearLayout(this); cols = 1;
         try {
             for (String[] en : entries()) index.add(new String[]{en[0], en[1], en[2], ""});
-            for (String[] en : entries()) { if (en[0].equals("apps")) continue; collPage = en[0]; collGroup = null; col.removeAllViews(); buildPage(en[0]); }
+            for (String[] en : entries()) { if (en[0].equals("apps") || en[0].equals("live")) continue; collPage = en[0]; collGroup = null; col.removeAllViews(); buildPage(en[0]); }
         } finally {
             collecting = false; col = sCol; cols = sCols;
             liveCpu = a; liveGpu = b; liveMem = c; liveHeat = d; compileView = e; ocView = f;
@@ -663,19 +665,184 @@ public class MainActivity extends Activity {
     private static long num(String s) { java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s); return m.find() ? Long.parseLong(m.group(1)) : -1; }
     private static String ghz(long khz) { return khz < 0 ? "–" : String.format(Locale.US, "%.2f", khz / 1e6); }
 
-    private void refreshLive() {
-        if (liveCpu == null) return;
+    // the latest readings and the last minute of them (one sample a second, whether or not a live view is on screen)
+    private long curFast = -1, curSlow = -1, curGpu = -1, curDdr = -1, curAvail = -1, curTotal = -1, curTemp = -1;
+    private static final int WINDOW = 90;
+    private final Hist hFast = new Hist(WINDOW), hSlow = new Hist(WINDOW), hGpu = new Hist(WINDOW), hTemp = new Hist(WINDOW), hMem = new Hist(WINDOW);
+    private float cpuMaxGhz = -1; private float[] cpuRules = new float[0];
+
+    private void sample() {
         String c = "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq";
-        long a = num(rd(String.format(c, 0))), b = num(rd(String.format(c, 4)));
-        liveCpu.setText(ghz(a) + " · " + ghz(b));
-        long g = num(grep("/proc/gpufreq/gpufreq_var_dump", "g_cur_opp_freq"));
-        liveGpu.setText(g < 0 ? "–" : (g / 1000) + " MHz");
-        long ddr = num(grep("/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_dump", "DDR"));
-        long avail = num(grep("/proc/meminfo", "MemAvailable")), total = num(grep("/proc/meminfo", "MemTotal"));
-        liveMem.setText((ddr < 0 ? "–" : (ddr / 1000) + " MHz") + (avail < 0 || total < 0 ? "" : "\n" + String.format(Locale.US, "%.1f of %.1f GB free", avail / 1048576f, total / 1048576f)));
+        curFast = num(rd(String.format(c, 0))); curSlow = num(rd(String.format(c, 4)));
+        curGpu = num(grep("/proc/gpufreq/gpufreq_var_dump", "g_cur_opp_freq"));
+        curDdr = num(grep("/sys/devices/platform/10012000.dvfsrc/helio-dvfsrc/dvfsrc_dump", "DDR"));
+        curAvail = num(grep("/proc/meminfo", "MemAvailable")); curTotal = num(grep("/proc/meminfo", "MemTotal"));
         long t = -1;
         for (int i = 0; i < 12 && t < 0; i++) if ("mtktscpu".equals(rd("/sys/class/thermal/thermal_zone" + i + "/type"))) t = num(rd("/sys/class/thermal/thermal_zone" + i + "/temp"));
-        liveHeat.setText(t < 0 ? "–" : String.format(Locale.US, "%.0f °C", t / 1000f));
+        curTemp = t;
+        hFast.add(curFast < 0 ? 0 : curFast / 1e6f); hSlow.add(curSlow < 0 ? 0 : curSlow / 1e6f);
+        hGpu.add(curGpu < 0 ? 0 : curGpu / 1000f); hTemp.add(curTemp < 0 ? 0 : curTemp / 1000f); hMem.add(curAvail < 0 ? 0 : curAvail / 1048576f);
+    }
+
+    private void refreshLive() {
+        if (liveCpu == null) return;
+        liveCpu.setText(ghz(curFast) + " · " + ghz(curSlow));
+        liveGpu.setText(curGpu < 0 ? "–" : (curGpu / 1000) + " MHz");
+        liveMem.setText((curDdr < 0 ? "–" : (curDdr / 1000) + " MHz") + (curAvail < 0 || curTotal < 0 ? "" : "\n" + String.format(Locale.US, "%.1f of %.1f GB free", curAvail / 1048576f, curTotal / 1048576f)));
+        liveHeat.setText(curTemp < 0 ? "–" : String.format(Locale.US, "%.0f °C", curTemp / 1000f));
+    }
+
+    private DialView liveDial;
+    /** The clocks inside the half ring of the preset dial. */
+    private void refreshDial() {
+        if (liveDial == null) return;
+        liveDial.setLive(new String[]{ghz(curFast) + " · " + ghz(curSlow), curGpu < 0 ? "–" : (curGpu / 1000) + " MHz", curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + " °C",
+            curAvail < 0 || curTotal < 0 ? "" : String.format(Locale.US, "%.1f of %.1f GB free", curAvail / 1048576f, curTotal / 1048576f)},
+            new String[]{"CPU GHz, fast · slow", "GPU", "Chip temperature", ""});
+    }
+
+    private String liveSummary() {
+        return curFast < 0 ? "Clocks, temperature and memory over the last minute"
+            : "CPU " + ghz(curFast) + " · " + ghz(curSlow) + " GHz, GPU " + (curGpu < 0 ? "–" : (curGpu / 1000) + " MHz") + ", " + (curTemp < 0 ? "–" : Math.round(curTemp / 1000f) + " °C");
+    }
+
+    // ---------- Live page: a Graphs tab (the last minute of every clock) and a State tab (what is set and what the hardware is doing) ----------
+    private int liveTab;                                   // 0 graphs, 1 state
+    private LinearLayout graphBox, stateBox;
+    private final ArrayList<LiveGraph> graphs = new ArrayList<>();
+    private TextView[] gv = new TextView[6];               // value labels of the graph headers: fast, slow, gpu, temp, memory, spare
+    private TextView[] sv2 = new TextView[3];              // live values of the state rows: gpu, battery, memory
+
+    private int tone(int a1, int a2) { return getColor(night ? a1 : a2); }
+
+    private static String readOr(String path, String def) { String v = rd(path); return v.isEmpty() ? def : v; }
+
+    /** Max clock and the table of clock steps, read once; the steps become the faint rules of the CPU graph. */
+    private void cpuScale() {
+        if (cpuMaxGhz > 0) return;
+        long m = Math.max(num(rd("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")), num(rd("/sys/devices/system/cpu/cpu4/cpufreq/cpuinfo_max_freq")));
+        cpuMaxGhz = m > 0 ? m / 1e6f : 2.3f;
+        ArrayList<Float> r = new ArrayList<>();
+        for (String f : rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies").split("\\s+")) { long k = num(f); if (k > 0) r.add(k / 1e6f); }
+        if (r.isEmpty() || r.size() > 12) { r.clear(); for (int i = 1; i <= 3; i++) r.add(cpuMaxGhz * i / 4f); }
+        cpuRules = new float[r.size()]; for (int i = 0; i < cpuRules.length; i++) cpuRules[i] = r.get(i);
+    }
+
+    private LinearLayout chartCard(String title, LiveGraph g, TextView[] values, int[] colors) {
+        LinearLayout c = newCard();
+        c.setPadding(px(20), px(14), px(20), px(10));
+        LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(text(title, 15, true, ink()), new LinearLayout.LayoutParams(0, -2, 1f));
+        for (int i = 0; i < values.length; i++) {
+            values[i].setTextColor(colors[i]);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2); lp.setMargins(px(14), 0, 0, 0);
+            head.addView(values[i], lp);
+        }
+        c.addView(head);
+        LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(-1, -2); gp.setMargins(0, px(6), 0, 0);
+        c.addView(g, gp);
+        graphs.add(g);
+        return c;
+    }
+    private TextView big() { return text("–", 20, true, ink()); }
+
+    private void pageLive() {
+        cpuScale();
+        int fastC = accent(), slowC = tone(android.R.color.system_accent2_300, android.R.color.system_accent2_600),
+            gpuC = tone(android.R.color.system_accent3_300, android.R.color.system_accent3_600), warm = 0xFFFF8A4C;
+        int rule = (dim() & 0xFFFFFF) | 0x40000000;
+
+        // tab switch
+        LinearLayout tabs = new LinearLayout(this);
+        GradientDrawable tg = new GradientDrawable(); tg.setColor(card()); tg.setCornerRadius(px(28)); tabs.setBackground(tg);
+        tabs.setPadding(px(4), px(4), px(4), px(4));
+        final TextView t0 = text("Graphs", 15, true, ink()), t1 = text("State", 15, true, ink());
+        for (TextView t : new TextView[]{t0, t1}) { t.setGravity(Gravity.CENTER); t.setPadding(0, px(10), 0, px(10)); tabs.addView(t, new LinearLayout.LayoutParams(0, -2, 1f)); }
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2); tp.setMargins(0, px(10), 0, px(8));
+        col.addView(tabs, tp);
+
+        graphBox = new LinearLayout(this); graphBox.setOrientation(LinearLayout.VERTICAL);
+        stateBox = new LinearLayout(this); stateBox.setOrientation(LinearLayout.VERTICAL);
+        col.addView(graphBox); col.addView(stateBox);
+
+        // graphs
+        for (int i = 0; i < gv.length; i++) gv[i] = big();
+        LiveGraph gc = new LiveGraph(this); gc.setup(new Hist[]{hFast, hSlow}, new int[]{fastC, slowC}, 0, cpuMaxGhz, cpuRules, -1, rule, 0, false);
+        View cpu = chartCard("CPU clock, GHz", gc, new TextView[]{gv[0], gv[1]}, new int[]{fastC, slowC});
+        LiveGraph gg = new LiveGraph(this); gg.setup(new Hist[]{hGpu}, new int[]{gpuC}, 0, 800, gpuRules(), -1, rule, 0, true);
+        View gpu = chartCard("GPU clock, MHz", gg, new TextView[]{gv[2]}, new int[]{gpuC});
+        LiveGraph gt = new LiveGraph(this); gt.setup(new Hist[]{hTemp}, new int[]{warm}, 20, 90, new float[]{40, 60}, 85, rule, 0xAAFF5A4C, true);
+        View heat = chartCard("Chip temperature, °C (dashed: 85 limit)", gt, new TextView[]{gv[3]}, new int[]{warm});
+        LiveGraph gm = new LiveGraph(this); gm.setup(new Hist[]{hMem}, new int[]{fastC}, 0, Math.max(1f, curTotal / 1048576f), new float[0], -1, rule, 0, true);
+        View mem = chartCard("Free memory, GB", gm, new TextView[]{gv[4]}, new int[]{fastC});
+        View[] cards = {cpu, gpu, heat, mem};
+        if (cols > 1) {
+            for (int i = 0; i < cards.length; i += 2) {
+                LinearLayout pair = new LinearLayout(this); pair.setBaselineAligned(false);
+                LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(0, -2, 1f); l.setMargins(0, 0, px(8), 0);
+                LinearLayout.LayoutParams r = new LinearLayout.LayoutParams(0, -2, 1f); r.setMargins(px(8), 0, 0, 0);
+                pair.addView(cards[i], l); pair.addView(cards[i + 1], r);
+                LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2); pp.setMargins(0, 0, 0, px(14));
+                graphBox.addView(pair, pp);
+            }
+        } else for (View v : cards) { LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, 0, 0, px(14)); graphBox.addView(v, lp); }
+        TextView note = text("The last 90 seconds, one reading a second. The lines step because the chip only runs at fixed clock steps (faint rules).", 13, false, dim());
+        note.setPadding(px(10), 0, px(10), 0); graphBox.addView(note);
+
+        // state
+        LinearLayout saved = col; col = stateBox;
+        String presetName = "custom";
+        for (String[] pr : PRESETS) if (pr[0].equals(get("preset", "balanced"))) presetName = pr[1];
+        String prof = get("profile_active", "");
+        LinearLayout c = group("Set now");
+        row(c, "Preset", "The dial on the home screen", text(presetName, 15, true, accent()));
+        row(c, "Profile", "A saved set of settings", text(prof.isEmpty() ? "none" : prof.replace('_', ' '), 15, true, accent()));
+        row(c, "Overclock", null, text(ocSummary(), 15, true, accent()));
+        row(c, "Thermal limit", "Chip temperature the kernel throttles at", text("off".equals(get("thermal", "stock")) ? "off" : "stock", 15, true, accent()));
+        c = group("Running now");
+        sv2[0] = text("–", 15, true, accent()); row(c, "GPU clock", "0 means the clock is not readable", sv2[0]);
+        sv2[1] = text("–", 15, true, accent()); row(c, "Battery", null, sv2[1]);
+        sv2[2] = text("–", 15, true, accent()); row(c, "Memory", "Memory clock and free RAM", sv2[2]);
+        col = saved;
+
+        final Runnable show = () -> {
+            graphBox.setVisibility(liveTab == 0 ? View.VISIBLE : View.GONE);
+            stateBox.setVisibility(liveTab == 1 ? View.VISIBLE : View.GONE);
+            for (int i = 0; i < 2; i++) {
+                TextView t = i == 0 ? t0 : t1; boolean on = i == liveTab;
+                GradientDrawable g = new GradientDrawable(); g.setColor(on ? accent() : 0); g.setCornerRadius(px(24)); t.setBackground(g);
+                t.setTextColor(on ? onAccent() : dim());
+            }
+        };
+        t0.setOnClickListener(v -> { liveTab = 0; show.run(); });
+        t1.setOnClickListener(v -> { liveTab = 1; show.run(); });
+        show.run();
+        refreshGraphs();
+    }
+
+    private float[] gpuRules() {
+        String[] o = list("gpu_opps", "680000,500000,400000");
+        float[] r = new float[o.length];
+        for (int i = 0; i < o.length; i++) { try { r[i] = Integer.parseInt(o[i].trim()) / 1000f; } catch (Exception e) { r[i] = 0; } }
+        return r;
+    }
+
+    private void refreshGraphs() {
+        if (graphBox == null) return;
+        if (gv[0] != null) {
+            gv[0].setText(ghz(curFast)); gv[1].setText(ghz(curSlow));
+            gv[2].setText(curGpu < 0 ? "–" : (curGpu / 1000) + " MHz");
+            gv[3].setText(curTemp < 0 ? "–" : String.format(Locale.US, "%.0f °C", curTemp / 1000f));
+            gv[4].setText(curAvail < 0 ? "–" : String.format(Locale.US, "%.1f", curAvail / 1048576f));
+        }
+        if (graphs.size() == 4) graphs.get(1).setRange(0, Math.max(800f, hGpu.max()), gpuRules());
+        for (LiveGraph g : graphs) g.invalidate();
+        if (sv2[0] != null) {
+            sv2[0].setText(curGpu < 0 ? "–" : (curGpu / 1000) + " MHz");
+            String b = rd("/sys/class/power_supply/battery/capacity"), st2 = rd("/sys/class/power_supply/battery/status");
+            sv2[1].setText(b.isEmpty() ? "–" : b + " %" + (st2.isEmpty() ? "" : ", " + st2.toLowerCase(Locale.US)));
+            sv2[2].setText((curDdr < 0 ? "–" : (curDdr / 1000) + " MHz") + (curAvail < 0 || curTotal < 0 ? "" : ", " + String.format(Locale.US, "%.1f of %.1f GB free", curAvail / 1048576f, curTotal / 1048576f)));
+        }
     }
 
     private static String compileLabel(String s) {
@@ -787,6 +954,7 @@ public class MainActivity extends Activity {
         liveGpu = liveCell(top, "GPU", grid ? 1f : 0.8f);
         liveMem = liveCell(bottom, "Memory clock and free RAM", grid ? 1f : 1.3f);
         liveHeat = liveCell(bottom, "Chip temperature", grid ? 1f : 0.8f);
+        c.setOnClickListener(v -> go("live"));
         col.addView(c, new LinearLayout.LayoutParams(-1, -2));
         refreshLive();
     }
@@ -804,6 +972,7 @@ public class MainActivity extends Activity {
         if (compact) d.setMaxRadius(130);
         d.setSelected(idx);
         d.setOnPick(i -> { set("preset", PRESETS[i][0]); build(); });
+        liveDial = d; refreshDial();
         col.addView(d, new LinearLayout.LayoutParams(-1, -2));
         String ap = get("profile_active", "");
         TextView name = text(idx >= 0 ? PRESETS[idx][1] : ap.isEmpty() ? "Custom" : ap.replace('_', ' '), compact ? 28 : 34, true, ink());
@@ -819,8 +988,8 @@ public class MainActivity extends Activity {
     // ---------- home ----------
     private void pageHome() {
         presetDial(false);
-        liveCard(false);
         LinearLayout c = group("Speed");
+        rowGo(c, "Live", liveSummary(), "live");
         rowGo(c, "Performance details", perfSummary(), "perf");
         rowGo(c, "Overclock", ocSummary(), "oc");
         profileRows(c);

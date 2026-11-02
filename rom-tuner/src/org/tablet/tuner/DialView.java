@@ -17,6 +17,7 @@ final class DialView extends View {
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private float dragPos = -1;
     private float maxR = 250;     // dp
+    private String[] liveVals = new String[0], liveLabs = new String[0];
 
     DialView(Context c) { super(c); }
 
@@ -26,6 +27,8 @@ final class DialView extends View {
     void setItems(String[] l) { labels = l; invalidate(); }
     void setSelected(int i) { selected = i; dragPos = -1; invalidate(); }
     void setOnPick(OnPick o) { onPick = o; }
+    /** Live readings drawn inside the arc: [0] large (with its label), [1] and [2] side by side, [3] one dim line. Labels may be empty. */
+    void setLive(String[] vals, String[] labs) { liveVals = vals; liveLabs = labs; invalidate(); }
     /** Caps the arc radius (dp) for a compact dial. */
     void setMaxRadius(float dp) { maxR = dp; requestLayout(); }
 
@@ -72,12 +75,33 @@ final class DialView extends View {
             p.setTextAlign(i == 0 ? Paint.Align.CENTER : i == n - 1 ? Paint.Align.CENTER : Paint.Align.CENTER);
             c.drawText(labels[i], tx, i == 0 || i == n - 1 ? CY + dp(26) : ty, p);
         }
+        drawLive(c, R, CX, CY);
         if (selected >= 0 || dragPos >= 0) {
             PointF t = at(pos);
             p.setStyle(Paint.Style.FILL); p.setColor(pos >= n - 1.5f ? warm : accent);
             c.drawCircle(t.x, t.y, dp(17), p);
             p.setColor(onAccent); c.drawCircle(t.x, t.y, dp(6), p);
         }
+    }
+
+    private void drawLive(Canvas c, float R, float CX, float CY) {
+        if (liveVals.length < 4) return;
+        float k = Math.max(0.5f, Math.min(1f, R / dp(250)));
+        p.setStyle(Paint.Style.FILL); p.setTextAlign(Paint.Align.CENTER);
+        p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        p.setColor(ink); p.setTextSize(dp(22 + 18 * k));
+        c.drawText(liveVals[0], CX, CY - 0.58f * R, p);
+        p.setColor(dim); p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL)); p.setTextSize(dp(11 + 2 * k));
+        c.drawText(liveLabs[0], CX, CY - 0.58f * R + dp(18), p);
+        for (int i = 1; i <= 2; i++) {
+            float x = CX + (i == 1 ? -0.36f : 0.36f) * R, y = CY - 0.2f * R;
+            p.setColor(ink); p.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); p.setTextSize(dp(15 + 6 * k));
+            c.drawText(liveVals[i], x, y, p);
+            p.setColor(dim); p.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL)); p.setTextSize(dp(11 + 2 * k));
+            c.drawText(liveLabs[i], x, y + dp(18), p);
+        }
+        p.setColor(dim); p.setTextSize(dp(11 + 2 * k));
+        c.drawText(liveVals[3], CX, CY + dp(16), p);
     }
 
     private int nearest(float x, float y) {
