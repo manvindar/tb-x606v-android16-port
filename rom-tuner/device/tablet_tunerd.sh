@@ -269,6 +269,8 @@ ext() {   # $1 key, loaded state
   case $1 in
     screen_timeout) settings put system screen_off_timeout $screen_timeout;;
     font_scale) settings put system font_scale $font_scale;;
+    font_weight) settings put secure font_weight_adjustment $font_weight;;
+    text_contrast) settings put secure high_text_contrast_enabled $text_contrast;;
     stay_awake) settings put global stay_on_while_plugged_in $stay_awake;;
     auto_rotate) settings put system accelerometer_rotation $auto_rotate;;
     show_taps) settings put system show_touches $show_taps;;
@@ -296,6 +298,8 @@ seedlive() {
   has() { grep -q "^$1=" $S; }
   v() { [ "$1" = null ] || [ -z "$1" ] && echo "$2" || echo "$1"; }
   has screen_timeout || putkey screen_timeout "$(v "$(settings get system screen_off_timeout)" 60000)"
+  has font_weight || putkey font_weight "$(v "$(settings get secure font_weight_adjustment)" 0)"
+  has text_contrast || putkey text_contrast "$(v "$(settings get secure high_text_contrast_enabled)" 0)"
   has font_scale || putkey font_scale "$(v "$(settings get system font_scale)" 1.0)"
   has stay_awake || putkey stay_awake "$(v "$(settings get global stay_on_while_plugged_in)" 0)"
   has auto_rotate || putkey auto_rotate "$(v "$(settings get system accelerometer_rotation)" 1)"
@@ -305,7 +309,7 @@ seedlive() {
   has bg_procs || putkey bg_procs "$(v "$(device_config get activity_manager max_cached_processes)" default)"
   has adb_tcp || putkey adb_tcp "$([ "$(getprop service.adb.tcp.port)" -gt 0 ] 2>/dev/null && echo 1 || echo 0)"
   has serial_console || putkey serial_console "$([ "$(getprop init.svc.console)" = running ] && echo 1 || echo 0)"
-  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_bri pq_color; do
     has $k || { pv=$(getprop persist.vendor.sys.pq.$(pq_prop $k)); [ -n "$pv" ] && putkey $k $pv; }
   done
   # keys added later: an existing install takes the values of its current preset (stock for battery and balanced)
@@ -316,10 +320,10 @@ seedlive() {
 }
 # MediaTek picture quality (MiraVision): the PQ HAL reads these persist props only when it starts, so it is restarted when one changes.
 # What the HAL does with them (vendor.mediatek.hardware.pq@2.3-impl.so): picmode 0 = factory tables, 2 = "user defined", where contrastidx, gsatidx (0..9, 4 neutral), gamma.index (0..14, 7 neutral) and shp.idx (0..11, 2 neutral) are read at start and programmed into the display colour and gamma blocks. Outside mode 2 those four are ignored. The DRE, HDR and ultra resolution props only reach shared memory for engines this SoC/kernel does not have (no AAL/DRE30 in the kernel, no DRE engine in libdpframework), so they change nothing; they are still accepted so old profiles load.
-pq_prop() { case $1 in pq_mode) echo picmode;; pq_contrast) echo contrastidx;; pq_sat) echo gsatidx;; pq_gamma) echo gamma.index;; pq_dre) echo mdp.dre.en;; pq_vp_dre) echo mdp.vp.dre.en;; pq_hdr) echo hdr.en;; pq_ultrares) echo ultrares.en;; pq_shp) echo shp.idx;; pq_color) echo mdp.color.idx;; esac; }
+pq_prop() { case $1 in pq_mode) echo picmode;; pq_contrast) echo contrastidx;; pq_sat) echo gsatidx;; pq_gamma) echo gamma.index;; pq_dre) echo mdp.dre.en;; pq_vp_dre) echo mdp.vp.dre.en;; pq_hdr) echo hdr.en;; pq_ultrares) echo ultrares.en;; pq_bri) echo brightidx;; pq_shp) echo shp.idx;; pq_color) echo mdp.color.idx;; esac; }
 pq_apply() {
   ch=0
-  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color; do
+  for k in pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_bri pq_color; do
     eval v=\$$k; [ -z "$v" ] && continue
     valid $k "$v" || { log "pq: skip bad $k=$v"; continue; }
     p=persist.vendor.sys.pq.$(pq_prop $k)
@@ -340,7 +344,7 @@ pq_live() {
 }
 # saved profiles: one line per profile in $PF, "name|key=value key=value ...". They hold the performance, memory, picture and overclock keys (oc_master, oc_cpu_uv, oc_gpu), not the look. A profile saved before the overclock keys existed leaves the overclock as it is when applied; one that has them switches it on or off and the crash and thermal guards still apply.
 PF=/data/local/tmp/tuner.profiles
-PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_color oc_master oc_cpu_uv oc_gpu"
+PKEYS="perf_profile gpu_freq oc governor thermal fg_boost ta_boost big_rotation cap_big cap_little dirty swappiness vfs_cache extra_free page_cluster io_sched readahead tcp_cc touch_duration_ms touch_opp touch_boost schedstats down_throttle up_throttle cap_margin mcdi watermark pq_mode pq_contrast pq_sat pq_gamma pq_dre pq_vp_dre pq_hdr pq_ultrares pq_shp pq_bri pq_color oc_master oc_cpu_uv oc_gpu"
 # a bare | in a ${%%} pattern is alternation in the device's mksh (it matched the whole line), so it is escaped below
 # a copy of the current wallpaper for the picture preview in the app (the file is the system's, the app cannot read it)
 preview_photo() {
@@ -386,6 +390,10 @@ valid() {   # $1 key, $2 value
     pq_contrast|pq_sat) oneof "$2" 0 1 2 3 4 5 6 7 8 9;;
     pq_gamma) oneof "$2" 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14;;
     pq_shp) oneof "$2" 0 1 2 3 4 5 6 7 8 9 10 11;;
+    pq_bri) oneof "$2" 0 1 2 3 4 5 6 7 8 9;;
+    font_weight) oneof "$2" 0 100 200 300;;
+    text_contrast) oneof "$2" 0 1;;
+    density) case $2 in reset|1[2-9][0-9]|2[0-9][0-9]|3[0-9][0-9]|400) return 0;; esac; return 1;;
     pq_dre|pq_vp_dre|pq_ultrares) oneof "$2" 0 1 2;;
     pq_hdr) oneof "$2" 0 1;;
     pq_color) oneof "$2" 0 1 2 3;;
@@ -465,6 +473,7 @@ theme() {
     J="{\"$K.color_both\":\"0\",\"$K.color_source\":\"preset\",\"$K.system_palette\":\"$accent\",\"$K.accent_color\":\"$accent\""
   fi
   J="$J,\"$K.theme_style\":\"$theme_style\""
+  fp=
   if [ "$font" != default ]; then
     fp=$(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.$font\$" | head -1)
     [ -n "$fp" ] && J="$J,\"$K.font\":\"$fp\""
@@ -474,12 +483,17 @@ theme() {
     for t in android launcher settings systemui; do J="$J,\"$K.icon_pack.$t\":\"com.android.theme.icon_pack.$icon_pack.$t\""; done
   fi
   settings put secure theme_customization_overlay_packages "$J,\"_applied_timestamp\":$(date +%s)000}"
+  # the theme controller of this SystemUI does not switch font overlays by itself, so do it here (--category: disable the others of that category)
+  if [ "$font" = default ]; then
+    for o in $(cmd overlay list --user 0 | grep -oE "[A-Za-z0-9_.]*\\.font\\.[a-z0-9]+\$"); do cmd overlay disable --user 0 $o; done
+  elif [ -n "$fp" ]; then cmd overlay enable-exclusive --user 0 --category $fp; fi
   # the black overlay shares the palette category and gets dropped when the theme is rewritten
   ( sleep 6; black ) &
 }
-black() { cmd overlay $([ "$black_theme" = 1 ] && echo enable || echo disable) --user 0 $BLACK; }
-nav() { cmd overlay enable-exclusive --user 0 --category android.theme.customization.navbar \
-          com.android.internal.systemui.navbar.$([ "$nav_mode" = threebutton ] && echo threebutton || echo gestural); }
+# set-priority highest: the dynamic palette overlay (android:dynamic_0) is above a freshly enabled overlay and would keep the surfaces dark blue instead of black
+black() { if [ "$black_theme" = 1 ]; then cmd overlay enable --user 0 $BLACK; cmd overlay set-priority $BLACK highest; else cmd overlay disable --user 0 $BLACK; fi; }
+# --category is a flag (disable the other overlays of the package's category), not an option with a value: the old call passed the category name as the package and failed
+nav() { cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$([ "$nav_mode" = threebutton ] && echo threebutton || echo gestural); }
 anim() { for k in window_animation_scale transition_animation_scale animator_duration_scale; do settings put global $k $anim_scale; done; }
 density_() { if [ "$density" = reset ]; then wm density reset; else wm density $density; fi; }
 bootanim() {
@@ -503,14 +517,14 @@ handle() {
     case $v in ''|*[!A-Za-z0-9._-]*) log "reject $k"; continue;; esac
     valid "$k" "$v" || { log "reject $k=$v"; continue; }
     log "req $k=$v"
-    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|preview_photo|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
+    case $k in preset|restart_ui|reboot|compile_now|compile_all|compile_pkg|compile_pkg_profile|reset_pkg|refresh_apps|preview_photo|night|black_theme|phh_effects|nav_mode|anim_scale|density|bootanim|logging|palette_source|accent|theme_style|font|icon_shape|icon_pack|screen_timeout|font_scale|font_weight|text_contrast|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console|pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_bri|pq_color|save_profile|update_profile|apply_profile|delete_profile|profile_active|profile_base|oc_master|oc_cpu_uv|oc_gpu|oc_profile|oc_stock) ;; *) putkey preset custom; putkey profile_active "";; esac
     case $k in
       perf_profile|gpu_lock|gpu_freq|oc|fg_boost|cap_big|cap_little) P=1; U=1; putkey $k $v;;
       palette_source|accent|theme_style|font|icon_shape|icon_pack) T=1; putkey $k $v;;
       governor|thermal|io_sched|readahead|swappiness|tcp_cc|ta_boost|big_rotation|vfs_cache|dirty|extra_free|page_cluster|touch_duration_ms|touch_opp|touch_boost|schedstats|down_throttle|up_throttle|cap_margin|mcdi|watermark) U=1; putkey $k $v;;
-      screen_timeout|font_scale|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
+      screen_timeout|font_scale|font_weight|text_contrast|stay_awake|auto_rotate|show_taps|window_blur|dns|bg_procs|cached_apps|wifi_country|adb_tcp|bt_work|serial_console) putkey $k $v; load; ext $k; continue;;
       night|black_theme|nav_mode|anim_scale|density|bootanim|logging) putkey $k $v;;
-      pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_color) putkey $k $v; Q=1; load; continue;;
+      pq_mode|pq_contrast|pq_sat|pq_gamma|pq_dre|pq_vp_dre|pq_hdr|pq_ultrares|pq_shp|pq_bri|pq_color) putkey $k $v; Q=1; load; continue;;
       oc_master|oc_cpu_uv|oc_gpu) putkey $k $v;;
       oc_profile) for kv in oc_master=1 oc=1 oc_cpu_uv=0 oc_gpu=730000 preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; P=1; U=1; load; continue;;
       oc_stock) for kv in oc_master=0 oc=0 oc_cpu_uv=0 oc_gpu=0 oc_status=off preset=custom profile_active=; do putkey ${kv%%=*} ${kv#*=}; done; rm -f $OCM; load; oc_off; P=1; U=1; continue;;

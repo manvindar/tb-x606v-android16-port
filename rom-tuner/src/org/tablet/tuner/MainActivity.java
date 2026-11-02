@@ -131,8 +131,8 @@ public class MainActivity extends Activity {
     private int sys(int night300, int day600) { return getColor(night ? night300 : day600); }
     private int accent() { return sys(android.R.color.system_accent1_300, android.R.color.system_accent1_600); }
     private int onAccent() { return sys(android.R.color.system_accent1_900, android.R.color.system_accent1_0); }
-    private int surface() { return sys(android.R.color.system_neutral1_900, android.R.color.system_neutral1_10); }
-    private int card() { return sys(android.R.color.system_neutral2_800, android.R.color.system_neutral2_100); }
+    private int surface() { return sys(android.R.color.system_surface_dark, android.R.color.system_surface_light); }   // follows the pure black overlay
+    private int card() { return sys(android.R.color.system_surface_container_high_dark, android.R.color.system_surface_container_high_light); }
     private int ink() { return sys(android.R.color.system_neutral1_50, android.R.color.system_neutral1_900); }
     private int dim() { return sys(android.R.color.system_neutral2_300, android.R.color.system_neutral2_600); }
     private int line() { return sys(android.R.color.system_neutral2_700, android.R.color.system_neutral2_200); }
@@ -347,6 +347,7 @@ public class MainActivity extends Activity {
             case "rubik": return "Rubik";
             case "notoserifsource": return "Noto Serif";
             case "googlesansflex": return "Google Sans Flex";
+            case "googlesans": return "Google Sans";
             default: return f.substring(0, 1).toUpperCase(Locale.US) + f.substring(1);
         }
     }
@@ -1578,7 +1579,7 @@ public class MainActivity extends Activity {
         LinearLayout pc = plainCard(); pc.setPadding(px(14), px(14), px(14), px(10));
         preview = new PicPreview(this); updatePreview(); loadPhoto();
         pc.addView(preview, new LinearLayout.LayoutParams(-1, -2));
-        TextView cap = text("Your wallpaper. An estimate for contrast and saturation. Left: your screen now. Right: with the changes below. Gamma and sharpness are not shown.", 12.5f, false, dim());
+        TextView cap = text("Your wallpaper. An estimate for contrast and saturation. Left: your screen now. Right: with the changes below. Gamma, sharpness and brightness are not shown.", 12.5f, false, dim());
         cap.setPadding(px(6), px(8), px(6), 0); pc.addView(cap);
         LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2); pp.setMargins(0, px(10), 0, px(4));
         col.addView(pc, pp);
@@ -1617,6 +1618,7 @@ public class MainActivity extends Activity {
         rowSlider(c, "Saturation", "Screen colour strength, 4 is neutral", "pq_sat", 9, 4, ten, true);
         rowSlider(c, "Gamma", "Mid-tone curve, 0 to 14, 7 is neutral", "pq_gamma", 14, 7, new String[]{"0", "1", "2", "3", "4", "5", "6", "7 (neutral)", "8", "9", "10", "11", "12", "13", "14"}, true);
         rowSlider(c, "Sharpness", "0 to 11, 2 is the factory value", "pq_shp", 11, 2, null, true);
+        rowSlider(c, "Brightness", "Picture brightness, 0 to 9, 4 is the factory value (the engine maps the steps unevenly)", "pq_bri", 9, 4, new String[]{"0", "1", "2", "3", "4 (neutral)", "5", "6", "7", "8", "9"}, true);
         rowChoice(c, "Video colour index", "MediaTek video colour index. Effect not verified on this tablet", "pq_color", new String[]{"0", "1", "2", "3"}, new String[]{"0", "1", "2", "3"}, "0", true);
     }
 
@@ -1699,9 +1701,12 @@ public class MainActivity extends Activity {
         sliderTile(c, row(c, "Animation speed", "Lower is faster. 0.5x makes everything feel quicker.", av), sb);
         rowSwitch(c, "Turn off window blur", "Cheaper to draw, which makes launcher and shade smoother", "window_blur", "0");
         c = group("Screen");
-        rowChoice(c, "Display size", "Smaller shows more content", "density",
-            new String[]{"Stock (240)", "Compact (192)", "Small (213)", "Large (260)", "Largest (280)"}, new String[]{"reset", "192", "213", "260", "280"}, "192");
+        rowChoice(c, "Display size", "Smaller numbers show more content. In portrait, above 250 the app uses the single column layout.", "density",
+            new String[]{"Tiny (160)", "Smaller (176)", "Compact (192)", "Small (213)", "Medium (225)", "Stock (240)", "Large (260)", "Larger (280)", "Largest (300)", "Huge (320)"},
+            new String[]{"160", "176", "192", "213", "225", "reset", "260", "280", "300", "320"}, "192");
         rowChoice(c, "Font size", null, "font_scale", new String[]{"Small", "Default", "Large", "Largest"}, new String[]{"0.85", "1.0", "1.15", "1.3"}, "1.0");
+        rowChoice(c, "Text weight", "Heavier strokes read clearer on this screen", "font_weight", new String[]{"Normal", "Medium", "Bold", "Extra bold"}, new String[]{"0", "100", "200", "300"}, "0");
+        rowSwitch(c, "High contrast text", "Draws text with an outline so it stands out from the background", "text_contrast", "0");
         rowChoice(c, "Screen timeout", null, "screen_timeout",
             new String[]{"15 seconds", "30 seconds", "1 minute", "2 minutes", "5 minutes", "10 minutes", "30 minutes"},
             new String[]{"15000", "30000", "60000", "120000", "300000", "600000", "1800000"}, "60000");
